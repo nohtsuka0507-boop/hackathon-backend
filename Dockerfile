@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 必要なモジュールを先にダウンロード
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod tidy
 
 # アプリケーションのコードをコピー
 COPY . .
