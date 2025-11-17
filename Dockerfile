@@ -1,6 +1,8 @@
 # 1. ビルド用のGo環境を準備 (Go 1.25)
+# "builder" という名前を付けます
 FROM golang:1.25-alpine AS builder
 
+# 作業ディレクトリを作成
 WORKDIR /app
 
 # 必要なモジュールを先にダウンロード/整理
