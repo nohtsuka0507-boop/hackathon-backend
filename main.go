@@ -1,73 +1,110 @@
 package main
 
 import (
-	"fmt"
-	"log"
-	"net/http"
-	"os"
-	// "database/sql" // 診断中はDB関連をすべて無効化
-	// "os/signal"
-	// "syscall"
-	// "db/controller"
-	// "db/dao"
-	// "db/usecase"
-	// _ "github.com/go-sql-driver/mysql"
+    "database/sql"
+    "fmt"
+    "log"
+    "net/http"
+    "os"
+    "os/signal"
+    "syscall"
+
+    // --- ↓ 既存のパッケージをインポート (あなたのプロジェクトに合わせて調整) ↓ ---
+    "db/controller"
+    "db/dao"
+    "db/usecase"
+    // --- ↑ 既存のパッケージをインポート ↑ ---
+
+    _ "github.com/go-sql-driver/mysql"
 )
 
+// main関数はアプリケーションのエントリーポイントです
 func main() {
-	// --- 1. DB接続 (クラッシュするため、診断中は一時的にすべて無効化) ---
-	// mysqlUser := os.Getenv("MYSQL_USER")
-	// mysqlPwd := os.Getenv("MYSQL_PWD")
-	// mysqlHost := os.Getenv("MYSQL_HOST")
-	// mysqlDatabase := os.Getenv("MYSQL_DATABASE")
-	// ... (db.Ping() など、すべて無効)
+    // --- 1. DB接続 (Cloud Runの環境変数を読み込む) ---
+    mysqlUser := os.Getenv("MYSQL_USER")
+    mysqlPwd := os.Getenv("MYSQL_PWD")
+    mysqlHost := os.Getenv("MYSQL_HOST")
+    mysqlDatabase := os.Getenv("MYSQL_DATABASE")
 
-	// --- 3. HTTPルーティング（診断用に変更）---
-	// "/" (ルートURL) にアクセスが来たら、環境変数を表示する
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		// Cloud Runから受け取った環境変数を取得
-		mysqlUser := os.Getenv("MYSQL_USER")
-		mysqlPwd := os.Getenv("MYSQL_PWD")
-		mysqlHost := os.Getenv("MYSQL_HOST")
-		mysqlDatabase := os.Getenv("MYSQL_DATABASE")
+    // Cloud Runの環境変数を使用して接続文字列を作成
+    // MYSQL_HOSTに "unix(/cloudsql/...)" が入ることで、Cloud SQLに接続する
+    connStr := fmt.Sprintf("%s:%s@%s/%s", mysqlUser, mysqlPwd, mysqlHost, mysqlDatabase)
+    
+    // DB接続を開く
+    db, err := sql.Open("mysql", connStr)
+    if err != nil {
+        // 接続失敗は致命的なのでログに出力して終了
+        log.Fatalf("fail: sql.Open, %v\n", err)
+    }
+    
+    // 接続の確認（ここでクラッシュする可能性が高い）
+    if err := db.Ping(); err != nil {
+        // Ping失敗は致命的なのでログに出力して終了
+        log.Fatalf("fail: db.Ping, %v\n", err)
+    }
+    log.Println("success: Database connection established.")
 
-		// 取得した値をそのままレスポンスとして書き出す
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8") // 文字化け防止
-		fmt.Fprintf(w, "--- Cloud Run 環境変数（かんきょうへんすう） 診断テスト ---\n\n")
-		fmt.Fprintf(w, "1. MYSQL_USER: [%s]\n", mysqlUser)
-		fmt.Fprintf(w, "2. MYSQL_PWD (パスワード): [%s]\n", maskPassword(mysqlPwd)) // パスワードは隠します
-		fmt.Fprintf(w, "3. MYSQL_HOST: [%s]\n", mysqlHost)
-		fmt.Fprintf(w, "4. MYSQL_DATABASE: [%s]\n", mysqlDatabase)
+    // DB接続を安全に閉じるための defer
+    defer func() {
+        if err := db.Close(); err != nil {
+            log.Printf("fail: db.Close(), %v\n", err)
+        }
+        log.Println("success: db.Close()")
+    }()
+    
+    // シグナルハンドリング
+    handleSysCall(db)
 
-		fmt.Fprintf(w, "\n\n--- 診断けっか ---\n")
-		if mysqlUser == "hackathon_admin" && mysqlDatabase == "hackathon" && mysqlHost != "" && mysqlPwd == "MyNewPass2025!" {
-			fmt.Fprintf(w, "成功: すべての変数がGoLandでの設定と一致しています。\n")
-			fmt.Fprintf(w, "（この画面が出たままなら、元のmain.goのdb.Ping()が別の理由で失敗しています）\n")
-		} else {
-			fmt.Fprintf(w, "エラー: 変数が間違っているか、空っぽです。\n")
-			fmt.Fprintf(w, "上の [ ] の中身と、GCPの「変数の設定」を見くらべてください。\n")
-		}
-	})
+    // --- 2. 部品の組み立て（依存性の注入）---
+    // DAO -> Usecase -> Controller の順に依存性を注入
+    userDAO := dao.NewUserDAO(db)
+    searchUserUsecase := usecase.NewSearchUserUsecase(userDAO)
+    registerUserUsecase := usecase.NewRegisterUserUsecase(userDAO)
+    searchUserController := controller.NewSearchUserController(searchUserUsecase)
+    registerUserController := controller.NewRegisterUserController(registerUserUsecase)
 
-	// --- 4. サーバー起動 ---
-	log.Println("Listening on :8000 ... (DIAGNOSTIC MODE)")
-	if err := http.ListenAndServe(":8000", nil); err != nil {
-		log.Fatal(err)
-	}
+    // --- 3. HTTPルーティング（リクエストの振り分け）---
+    http.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+        switch r.Method {
+        case http.MethodGet:
+            searchUserController.Handle(w, r)
+        case http.MethodPost:
+            registerUserController.Handle(w, r)
+        default:
+            log.Printf("fail: HTTP Method is %s", r.Method)
+            w.WriteHeader(http.StatusMethodNotAllowed)
+        }
+    })
+    
+    // ルートパスにアクセスされた場合の処理（Not Foundを返す）
+    http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        w.WriteHeader(http.StatusNotFound)
+        fmt.Fprintf(w, "404 Not Found: Access /user endpoint.")
+    })
+
+
+    // --- 4. サーバー起動 ---
+    // Cloud Runは環境変数 PORT で待ち受けるポートを指定します
+    port := os.Getenv("PORT")
+    if port == "" {
+        port = "8000" // PORTが設定されていない場合はデフォルトの8000番を使う
+    }
+    
+    log.Printf("Listening on :%s", port)
+    if err := http.ListenAndServe(":"+port, nil); err != nil {
+        log.Fatal(err)
+    }
 }
 
-// パスワードを隠すためのヘルパー関数
-func maskPassword(pwd string) string {
-	if len(pwd) == 0 {
-		return "（空っぽです）"
-	}
-	if len(pwd) > 0 {
-		return "****** (設定されています)"
-	}
-	return ""
+// シグナルを受けてDB接続を閉じる処理
+func handleSysCall(db *sql.DB) {
+    sig := make(chan os.Signal, 1)
+    // SIGTERM (Cloud Run停止シグナル) と SIGINT を監視
+    signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
+    go func() {
+        s := <-sig
+        log.Printf("received syscall, %v", s)
+        // db.Close() は defer で実行されるため、ここでは終了シグナルだけ送る
+        os.Exit(0)
+    }()
 }
-
-// (handleSysCallはDBを使わないので無効化)
-// func handleSysCall(db *sql.DB) {
-// ...
-// }
