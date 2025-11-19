@@ -27,6 +27,6 @@ WORKDIR /app
 COPY --from=builder /app/server .
 
 # このコンテナが起動したときに実行するコマンド
-# Cloud Runが "8000" ポートに来るように設定されている
-ENV PORT 8000
+# Cloud Runは環境変数PORTを読み込んで待ち受けます
+ENV PORT 8080
 CMD ["/app/server"]
