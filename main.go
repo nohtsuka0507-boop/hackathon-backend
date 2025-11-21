@@ -9,58 +9,66 @@ import (
 	"os/signal"
 	"syscall"
 
-	// --- ↓ 新しく作ったパッケージをすべてインポート ↓ ---
+	// --- ↓ 既存のパッケージをすべてインポート ↓ ---
 	"db/controller"
 	"db/dao"
 	"db/usecase"
-	// --- ↑ 新しく作ったパッケージをすべてインポート ↑ ---
+	// --- ↑ 既存のパッケージをすべてインポート ↑ ---
 
 	_ "github.com/go-sql-driver/mysql"
 )
 
 func main() {
-	// --- 1. DB接続 (Cloud Runの環境変数を読み込むように修正) ---
+	// --- 1. DB接続 ---
 	mysqlUser := os.Getenv("MYSQL_USER")
 	mysqlPwd := os.Getenv("MYSQL_PWD")
-	mysqlHost := os.Getenv("MYSQL_HOST") // unix(/cloudsql/...)が入ることを期待
+	mysqlHost := os.Getenv("MYSQL_HOST")
 	mysqlDatabase := os.Getenv("MYSQL_DATABASE")
 
-	// Cloud SQLインスタンスに接続
 	connStr := fmt.Sprintf("%s:%s@%s/%s", mysqlUser, mysqlPwd, mysqlHost, mysqlDatabase)
-	db, err := sql.Open("mysql", connStr) 
+	db, err := sql.Open("mysql", connStr)
 	if err != nil {
 		log.Fatalf("fail: sql.Open, %v\n", err)
 	}
 	if err := db.Ping(); err != nil {
-		// ここでクラッシュすると、Cloud Runが仮のページを返す
 		log.Fatalf("fail: _db.Ping, %v\n", err)
 	}
 
-	// アプリケーション終了時にDB接続を閉じる
 	defer func() {
 		if err := db.Close(); err != nil {
 			log.Printf("fail: db.Close(), %v\n", err)
 		}
-		log.Println("success: db.Close()")
 	}()
 	handleSysCall(db)
 
-	// --- 2. 部品の組み立て（依存性の注入）---
-	// (DB) -> DAO -> Usecase -> Controller
+	// --- 2. 部品の組み立て ---
 	userDAO := dao.NewUserDAO(db)
 	searchUserUsecase := usecase.NewSearchUserUsecase(userDAO)
 	registerUserUsecase := usecase.NewRegisterUserUsecase(userDAO)
 	searchUserController := controller.NewSearchUserController(searchUserUsecase)
 	registerUserController := controller.NewRegisterUserController(registerUserUsecase)
 
-	// --- 3. HTTPルーティング（リクエストの振り分け）---
+	// --- 3. HTTPルーティング（CORS対応を追加！）---
 	http.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
+		// ▼▼▼ ここからCORS許可設定 ▼▼▼
+		// 誰からのアクセスでも許可する（*）
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		// 許可するメソッド
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		// 許可するヘッダー
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// "OPTIONS"メソッド（ブラウザからの事前確認）が来たら、OKだけ返して終了
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		// ▲▲▲ ここまでCORS許可設定 ▲▲▲
+
 		switch r.Method {
 		case http.MethodGet:
-			// /user (GET) でユーザーリストを返す
 			searchUserController.Handle(w, r)
 		case http.MethodPost:
-			// /user (POST) でユーザー登録を行う
 			registerUserController.Handle(w, r)
 		default:
 			log.Printf("fail: HTTP Method is %s\n", r.Method)
@@ -69,12 +77,10 @@ func main() {
 	})
 
 	// --- 4. サーバー起動 ---
-	// Cloud Runは8080ポートに来るリクエストを環境変数PORTで指定するため、それを採用
 	port := os.Getenv("PORT")
 	if port == "" {
-		port = "8080" // デフォルトポート
+		port = "8080"
 	}
-	
 	log.Printf("Listening on :%s ...\n", port)
 	if err := http.ListenAndServe(":"+port, nil); err != nil {
 		log.Fatal(err)
@@ -91,4 +97,3 @@ func handleSysCall(db *sql.DB) {
 		os.Exit(0)
 	}()
 }
-
