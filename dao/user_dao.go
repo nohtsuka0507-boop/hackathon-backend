@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	// さっき作った "db/model" パッケージをインポート
-	"db/model"
+	"hackathon-backend/model"
 	"log"
 
 	// main.goから持ってくる

@@ -2,8 +2,8 @@ package usecase
 
 import (
 	// ↓ さっき作った2つのパッケージをインポート
-	"db/dao"
-	"db/model"
+	"hackathon-backend/dao"
+	"hackathon-backend/model"
 )
 
 // RegisterUserUsecase は「ユーザーを登録する」という仕事を担当

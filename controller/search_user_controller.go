@@ -2,8 +2,8 @@ package controller
 
 import (
 	// "db/model" // modelはJSONの「型」として使う
-	"db/usecase"
 	"encoding/json"
+	"hackathon-backend/usecase"
 	"log"
 	"net/http"
 )

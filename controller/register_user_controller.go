@@ -2,8 +2,8 @@ package controller
 
 import (
 	// ↓ さっき作った「頭脳」パッケージをインポート
-	"db/usecase"
 	"encoding/json"
+	"hackathon-backend/usecase"
 	"io"
 	"log"
 	"net/http"

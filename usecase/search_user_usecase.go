@@ -1,8 +1,8 @@
 package usecase
 
 import (
-	"db/dao"
-	"db/model"
+	"hackathon-backend/dao"
+	"hackathon-backend/model"
 )
 
 // SearchUserUsecase は「ユーザーを検索する」という仕事を担当
