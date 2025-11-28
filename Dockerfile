@@ -1,32 +1,33 @@
-# 1. ビルド用のGo環境を準備 (Go 1.25)
-# "builder" という名前を付けます
-FROM golang:1.25-alpine AS builder
+# 1. ビルド用環境 (Goのコンパイルを行う)
+FROM golang:1.23-alpine AS builder
 
 # 作業ディレクトリを作成
 WORKDIR /app
 
-# 必要なモジュールを先にダウンロード/整理
+# 依存関係ファイルをコピーしてダウンロード
 COPY go.mod go.sum ./
-RUN go mod tidy
+RUN go mod download
 
-# アプリケーションのコードをコピー
+# ソースコードを全てコピー
 COPY . .
 
-# アプリケーションをビルド（コンパイル）
-# CGO_ENABLED=0 は静的リンクのため、GOOS=linux はLinux実行ファイルのため
-RUN CGO_ENABLED=0 GOOS=linux go build -o /app/server ./main.go
+# バイナリファイル（実行ファイル）をビルド
+# CGO_ENABLED=0 は軽量なAlpine Linuxで動かすために必須
+RUN CGO_ENABLED=0 GOOS=linux go build -o main .
 
-# --- ↓ここからが変更点（distrolessの代わり）↓ ---
+# 2. 実行用環境 (完成したバイナリだけを乗せる軽量環境)
+FROM alpine:latest
 
-# 2. 実行用の「小さなAlpine環境」を準備
-FROM alpine:3.18
+# セキュリティ証明書を入れる（外部API通信に必要）
+RUN apk --no-cache add ca-certificates
 
-WORKDIR /app
+WORKDIR /root/
 
-# 1. でビルドした "server" プログラムだけをコピー
-COPY --from=builder /app/server .
+# ビルド環境から実行ファイルだけをコピー
+COPY --from=builder /app/main .
 
-# このコンテナが起動したときに実行するコマンド
-# Cloud Runが "8000" ポートに来るように設定されている
-ENV PORT 8000
-CMD ["/app/server"]
+# ポート8080を開ける
+EXPOSE 8080
+
+# サーバー起動
+CMD ["./main"]

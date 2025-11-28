@@ -1,0 +1,18 @@
+cat <<EOF > .gitignore
+# --- 秘密情報（絶対に公開しない） ---
+.env
+
+# --- Goのビルド生成物 ---
+# プロジェクト名（Windowsの場合は.exeも）
+hackathon-backend
+*.exe
+*.test
+*.out
+
+# --- Macのシステムファイル ---
+.DS_Store
+
+# --- エディタの設定 ---
+.vscode/
+.idea/
+EOF

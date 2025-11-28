@@ -9,15 +9,21 @@ import (
 	"os/signal"
 	"syscall"
 
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/joho/godotenv"
+
 	"hackathon-backend/controller"
 	"hackathon-backend/dao"
 	"hackathon-backend/usecase"
-
-	_ "github.com/go-sql-driver/mysql"
 )
 
 func main() {
-	// --- 1. DB接続 ---
+	// --- 0. 環境変数の読み込み ---
+	if err := godotenv.Load(); err != nil {
+		log.Println("Note: .env file not found")
+	}
+
+	// --- 1. DB接続 (エラーでも止まらないように修正) ---
 	mysqlUser := os.Getenv("MYSQL_USER")
 	mysqlPwd := os.Getenv("MYSQL_PWD")
 	mysqlHost := os.Getenv("MYSQL_HOST")
@@ -25,129 +31,95 @@ func main() {
 
 	connStr := fmt.Sprintf("%s:%s@%s/%s", mysqlUser, mysqlPwd, mysqlHost, mysqlDatabase)
 	db, err := sql.Open("mysql", connStr)
+
+	// ★ 修正ポイント: DBエラーでも Fatal（強制終了）にしない
 	if err != nil {
-		log.Fatalf("fail: sql.Open, %v\n", err)
+		log.Printf("Warning: DB init failed: %v (Running in No-DB Mode)\n", err)
+	} else if err := db.Ping(); err != nil {
+		log.Printf("Warning: DB connection failed: %v (Running in No-DB Mode)\n", err)
+	} else {
+		log.Println("Success: Connected to MySQL database!")
 	}
-	if err := db.Ping(); err != nil {
-		log.Fatalf("fail: _db.Ping, %v\n", err)
-	}
+	// defer db.Close() // DBがない場合のパニック防止のため削除
 
-	defer func() {
-		if err := db.Close(); err != nil {
-			log.Printf("fail: db.Close(), %v\n", err)
-		}
-	}()
-	handleSysCall(db)
+	// --- 2. 依存関係の注入 (DI) ---
 
-	// --- 2. コントローラーの初期化 ---
+	// ★ 認証機能
+	authController := controller.NewAuthController(db)
 
-	// User関連
+	// ユーザー機能
 	userDAO := dao.NewUserDAO(db)
 	searchUserUsecase := usecase.NewSearchUserUsecase(userDAO)
 	registerUserUsecase := usecase.NewRegisterUserUsecase(userDAO)
 	searchUserController := controller.NewSearchUserController(searchUserUsecase)
 	registerUserController := controller.NewRegisterUserController(registerUserUsecase)
 
-	// Gemini関連
-	geminiController := controller.NewGeminiController()
-
-	// ★ Item関連 (ここを追加)
+	// 商品機能
 	itemDAO := dao.NewItemDAO(db)
 	itemController := controller.NewItemController(itemDAO)
 
+	// AI機能
+	geminiController := controller.NewGeminiController()
+
 	// --- 3. ルーティング設定 ---
+	mux := http.NewServeMux()
 
-	// Userルーティング
-	http.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	// ★ 認証ルート
+	mux.HandleFunc("POST /register", authController.HandleRegister)
+	mux.HandleFunc("POST /login", authController.HandleLogin)
 
-		switch r.Method {
-		case http.MethodGet:
-			searchUserController.Handle(w, r)
-		case http.MethodPost:
-			registerUserController.Handle(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
+	// User Endpoints
+	mux.HandleFunc("GET /user", searchUserController.Handle)
+	mux.HandleFunc("POST /user", registerUserController.Handle)
 
-	// Geminiルーティング
-	http.HandleFunc("/generate-description", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
+	// Item Endpoints
+	mux.HandleFunc("GET /items", itemController.HandleGetItems)
+	mux.HandleFunc("POST /items", itemController.HandleAddItem)
+	mux.HandleFunc("POST /items/purchase", itemController.HandlePurchase)
 
-		if r.Method == http.MethodPost {
-			geminiController.HandleGenerate(w, r)
-		} else {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
-
-	// ★ Itemルーティング (一覧取得・出品)
-	http.HandleFunc("/items", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		switch r.Method {
-		case http.MethodGet:
-			itemController.HandleGetItems(w, r)
-		case http.MethodPost:
-			itemController.HandleAddItem(w, r)
-		default:
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
-
-	// ★ Itemルーティング (購入)
-	http.HandleFunc("/items/purchase", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		if r.Method == http.MethodPost {
-			itemController.HandlePurchase(w, r)
-		} else {
-			w.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	})
+	// AI Endpoints
+	mux.HandleFunc("POST /generate-description", geminiController.HandleGenerate)
+	mux.HandleFunc("POST /analyze-image", geminiController.HandleAnalyzeImage)
+	// ★ 出品用AI分析への道
+	mux.HandleFunc("POST /analyze-listing", geminiController.HandleAnalyzeListing)
 
 	// --- 4. サーバー起動 ---
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-	log.Printf("Listening on :%s ...\n", port)
-	if err := http.ListenAndServe(":"+port, nil); err != nil {
-		log.Fatal(err)
+
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: enableCORS(mux),
 	}
+
+	go func() {
+		log.Printf("🚀 Server is running on http://localhost:%s\n", port)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
+
+	// 終了シグナル待機
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+	log.Println("Shutting down server...")
 }
 
-func handleSysCall(db *sql.DB) {
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		s := <-sig
-		log.Printf("received syscall, %v", s)
-		os.Exit(0)
-	}()
+// CORS設定
+func enableCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
