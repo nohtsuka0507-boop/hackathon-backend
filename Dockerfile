@@ -11,6 +11,7 @@ RUN go mod download
 # ソースコードを全てコピー
 COPY . .
 
+RUN go mod tidy
 # バイナリファイル（実行ファイル）をビルド
 # CGO_ENABLED=0 は軽量なAlpine Linuxで動かすために必須
 RUN CGO_ENABLED=0 GOOS=linux go build -o main .
