@@ -16,17 +16,16 @@ func NewItemDAO(db *sql.DB) *ItemDAO {
 
 // GetAll: 全ての商品と「いいね数」を取得
 func (d *ItemDAO) GetAll() ([]*model.Item, error) {
+	// ★修正: ORDER BY を削除しました（エラー回避のため）
 	query := `
 		SELECT 
 			i.id, i.name, i.price, i.description, i.sold_out, i.image_url,
 			(SELECT COUNT(*) FROM likes WHERE item_id = i.id) as like_count
 		FROM items i
-		ORDER BY i.created_at DESC
-	` // ※新しい順(DESC)に並ぶように修正しました（created_atがない場合は i.id DESC でもOK）
-	// もし created_at カラムがないエラーが出る場合は ORDER BY i.id DESC にしてください。
-
+	`
 	rows, err := d.DB.Query(query)
 	if err != nil {
+		log.Printf("GetAll Query Error: %v", err) // エラーログを追加
 		return nil, err
 	}
 	defer rows.Close()
@@ -34,21 +33,21 @@ func (d *ItemDAO) GetAll() ([]*model.Item, error) {
 	return d.scanItems(rows)
 }
 
-// ★追加: 商品名で検索 (部分一致)
+// Search: 商品名で検索 (部分一致)
 func (d *ItemDAO) Search(keyword string) ([]*model.Item, error) {
-	// キーワードを含む商品を検索 (いいね数も一緒に取得)
+	// 検索の方も ORDER BY を安全な形(なし)に修正
 	query := `
 		SELECT 
 			i.id, i.name, i.price, i.description, i.sold_out, i.image_url,
 			(SELECT COUNT(*) FROM likes WHERE item_id = i.id) as like_count
 		FROM items i
 		WHERE i.name LIKE ?
-		ORDER BY i.id DESC
 	`
 	searchTerm := "%" + keyword + "%"
 
 	rows, err := d.DB.Query(query, searchTerm)
 	if err != nil {
+		log.Printf("Search Query Error: %v", err)
 		return nil, err
 	}
 	defer rows.Close()
@@ -87,7 +86,6 @@ func (d *ItemDAO) Purchase(id string) error {
 
 // Insert: 商品登録
 func (d *ItemDAO) Insert(item *model.Item) error {
-	// created_at があれば追加すべきですが、今回はシンプルな構成を維持します
 	query := "INSERT INTO items (id, name, price, description, sold_out, image_url) VALUES (?, ?, ?, ?, ?, ?)"
 	_, err := d.DB.Exec(query, item.ID, item.Name, item.Price, item.Description, false, item.ImageURL)
 	if err != nil {
