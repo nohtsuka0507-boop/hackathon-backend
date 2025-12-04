@@ -18,25 +18,42 @@ func NewItemController(itemDAO *dao.ItemDAO) *ItemController {
 	return &ItemController{ItemDAO: itemDAO}
 }
 
-// HandleGetItems: 商品一覧を返す (GET /items)
+// HandleGetItems: 商品一覧または検索結果を返す (GET /items)
 func (c *ItemController) HandleGetItems(w http.ResponseWriter, r *http.Request) {
-	// ログを出力して動作確認
-	log.Println("Handling GetItems request...")
+	w.Header().Set("Content-Type", "application/json")
 
-	items, err := c.ItemDAO.GetAll()
+	// ★追加: URLクエリパラメータ "q" を取得
+	keyword := r.URL.Query().Get("q")
+
+	var items []*model.Item
+	var err error
+
+	if keyword != "" {
+		// キーワードがある場合は検索を実行
+		log.Printf("Searching items with keyword: %s", keyword)
+		items, err = c.ItemDAO.Search(keyword)
+	} else {
+		// ない場合は全件取得
+		items, err = c.ItemDAO.GetAll()
+	}
+
 	if err != nil {
-		log.Printf("fail: get all items, %v\n", err)
-		w.WriteHeader(http.StatusInternalServerError)
+		log.Printf("fail: get items, %v\n", err)
+		// エラー時も空配列を返してフロントエンドがクラッシュしないようにする
+		json.NewEncoder(w).Encode([]*model.Item{})
 		return
 	}
 
-	log.Printf("Success: Got %d items from DB\n", len(items))
+	// nullの場合は空配列にする
+	if items == nil {
+		items = []*model.Item{}
+	}
 
-	w.Header().Set("Content-Type", "application/json")
+	log.Printf("Success: Returning %d items\n", len(items))
 	json.NewEncoder(w).Encode(items)
 }
 
-// HandlePurchase: 商品を購入する (POST /items/purchase)
+// HandlePurchase: 商品を購入する
 func (c *ItemController) HandlePurchase(w http.ResponseWriter, r *http.Request) {
 	id := r.URL.Query().Get("id")
 	if id == "" {
@@ -54,7 +71,7 @@ func (c *ItemController) HandlePurchase(w http.ResponseWriter, r *http.Request) 
 	fmt.Fprintf(w, `{"message": "Purchase successful"}`)
 }
 
-// HandleAddItem: 商品を出品する (POST /items)
+// HandleAddItem: 商品を出品する
 func (c *ItemController) HandleAddItem(w http.ResponseWriter, r *http.Request) {
 	log.Println("Handling AddItem request...")
 
@@ -64,14 +81,12 @@ func (c *ItemController) HandleAddItem(w http.ResponseWriter, r *http.Request) {
 		Description string `json:"description"`
 		ImageURL    string `json:"image_url"`
 	}
-	// リクエストボディの読み込みエラーを確認
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		log.Printf("fail: decode request body, %v\n", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// ID生成
 	id, _ := generateItemID()
 
 	item := &model.Item{
@@ -81,9 +96,6 @@ func (c *ItemController) HandleAddItem(w http.ResponseWriter, r *http.Request) {
 		Description: req.Description,
 		ImageURL:    req.ImageURL,
 	}
-
-	// 画像サイズのログ（デバッグ用）
-	log.Printf("Inserting item: %s (Price: %d), Image length: %d\n", item.Name, item.Price, len(item.ImageURL))
 
 	if err := c.ItemDAO.Insert(item); err != nil {
 		log.Printf("fail: insert item, %v\n", err)
@@ -97,7 +109,6 @@ func (c *ItemController) HandleAddItem(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(item)
 }
 
-// 簡易的なID生成関数
 func generateItemID() (string, error) {
 	b := make([]byte, 8)
 	_, err := rand.Read(b)
