@@ -1,78 +1,78 @@
 package dao
 
 import (
-	"context"
 	"database/sql"
-	// さっき作った "db/model" パッケージをインポート
 	"hackathon-backend/model"
 	"log"
 
-	// main.goから持ってくる
 	_ "github.com/go-sql-driver/mysql"
 )
 
-// UserDAO はデータベース接続(*sql.DB)を保持します。
 type UserDAO struct {
 	DB *sql.DB
 }
 
-// NewUserDAO は、新しいUserDAOを初期化します。
 func NewUserDAO(db *sql.DB) *UserDAO {
 	return &UserDAO{DB: db}
 }
 
-// FindUsersByName は、Nameでユーザーを検索するSQLロジック（getUserHandlerから移植）
-//
-// 戻り値は []model.User（Userのスライス）です。
+// CreateUser は、ユーザーをDB(usersテーブル)に登録します
+func (d *UserDAO) CreateUser(user *model.User) error {
+	// main.go で定義したテーブル名 "users" に合わせます
+	// カラム: id, name, email, password
+	query := "INSERT INTO users (id, name, email, password) VALUES (?, ?, ?, ?)"
+
+	// シンプルなExecで十分ですが、元のコードを尊重してトランザクションを使う形でもOKです。
+	// ここでは確実に動くシンプルな形にします。
+	_, err := d.DB.Exec(query, user.ID, user.Name, user.Email, user.Password)
+	if err != nil {
+		log.Printf("fail: insert user, %v\n", err)
+		return err
+	}
+	return nil
+}
+
+// GetUserByEmail は、メールアドレスからユーザーを取得します（ログイン用）
+func (d *UserDAO) GetUserByEmail(email string) (*model.User, error) {
+	user := &model.User{}
+	query := "SELECT id, name, email, password FROM users WHERE email = ?"
+
+	row := d.DB.QueryRow(query, email)
+	err := row.Scan(&user.ID, &user.Name, &user.Email, &user.Password)
+
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil // ユーザーが見つからない場合
+		}
+		log.Printf("fail: get user by email, %v\n", err)
+		return nil, err
+	}
+
+	return user, nil
+}
+
+// FindUsersByName は、Nameでユーザーを検索します（既存機能の維持）
 func (d *UserDAO) FindUsersByName(name string) ([]model.User, error) {
-	// --- ↓ 移植したロジック ↓ ---
-	rows, err := d.DB.Query("SELECT id, name, age FROM user WHERE name = ?", name)
+	// テーブル名を "users" に修正
+	// Age はなくなったので取得しません
+	query := "SELECT id, name, email, password FROM users WHERE name = ?"
+
+	rows, err := d.DB.Query(query, name)
 	if err != nil {
 		log.Printf("fail: db.Query, %v\n", err)
-		return nil, err // HTTP応答はせず、エラーだけを返す
+		return nil, err
 	}
 	defer rows.Close()
 
-	users := make([]model.User, 0) // model.User を使う
+	users := make([]model.User, 0)
 	for rows.Next() {
-		var u model.User // model.User を使う
-		if err := rows.Scan(&u.Id, &u.Name, &u.Age); err != nil {
+		var u model.User
+		if err := rows.Scan(&u.ID, &u.Name, &u.Email, &u.Password); err != nil {
 			log.Printf("fail: rows.Scan, %v\n", err)
-			return nil, err // HTTP応答はせず、エラーだけを返す
+			return nil, err
 		}
 		users = append(users, u)
 	}
-	// --- ↑ 移植したロジック ↑ ---
 
-	return users, nil // JSON応答はせず、Userのスライスを返す
-}
-
-// CreateUser は、ユーザーをDBに登録するSQLロジック（createUserHandlerから移植）
-//
-// 引数は *model.User です。
-func (d *UserDAO) CreateUser(user *model.User) error {
-	// --- ↓ 移植したロジック ↓ ---
-	// トランザクションを開始
-	tx, err := d.DB.Begin()
-	if err != nil {
-		log.Printf("fail: db.Begin, %v\n", err)
-		return err // HTTP応答はせず、エラーだけを返す
-	}
-
-	// SQLを実行
-	_, err = tx.ExecContext(context.Background(), "INSERT INTO user (id, name, age) VALUES (?, ?, ?)", user.Id, user.Name, user.Age)
-	if err != nil {
-		log.Printf("fail: tx.ExecContext, %v\n", err)
-		tx.Rollback() // エラー時はロールバック
-		return err    // HTTP応答はせず、エラーだけを返す
-	}
-
-	// トランザクションをコミット
-	if err := tx.Commit(); err != nil {
-		log.Printf("fail: tx.Commit, %v\n", err)
-		return err // HTTP応答はせず、エラーだけを返す
-	}
-	// --- ↑ 移植したロジック ↑ ---
-
-	return nil // 成功
+	return users, nil
 }

@@ -2,8 +2,9 @@ package controller
 
 import (
 	"context"
-	"encoding/json" // 追加
-	"fmt"           // 追加
+	"encoding/json"
+	"fmt"
+	"hackathon-backend/dao"
 	"io"
 	"log"
 	"net/http"
@@ -14,15 +15,16 @@ import (
 	"google.golang.org/api/option"
 )
 
-type GeminiController struct{}
-
-func NewGeminiController() *GeminiController {
-	return &GeminiController{}
+type GeminiController struct {
+	ItemDAO *dao.ItemDAO
 }
 
-// テキスト生成 (中身を実装しました)
+func NewGeminiController(itemDAO *dao.ItemDAO) *GeminiController {
+	return &GeminiController{ItemDAO: itemDAO}
+}
+
+// HandleGenerate: テキスト生成のみ
 func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request) {
-	// 1. リクエストボディのJSONを読み込む
 	var req struct {
 		ProductName string `json:"productName"`
 	}
@@ -31,7 +33,6 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// 2. AIクライアントの初期化
 	ctx := context.Background()
 	apiKey := os.Getenv("GEMINI_API_KEY")
 	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
@@ -42,40 +43,34 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 	}
 	defer client.Close()
 
-	// 3. モデル選択 (gemini-2.0-flash)
-	model := client.GenerativeModel("gemini-2.0-flash")
-
-	// 4. プロンプト作成
+	// ★修正: 変数名を model から genModel に変更
+	genModel := client.GenerativeModel("gemini-2.0-flash")
 	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、テキストのみで返してください。", req.ProductName)
 
-	// 5. 生成実行
-	resp, err := model.GenerateContent(ctx, genai.Text(prompt))
+	resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
 		log.Printf("Gemini Gen Error: %v", err)
 		http.Error(w, "AI generation failed", http.StatusInternalServerError)
 		return
 	}
 
-	// 6. 結果を返す
 	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
 		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
 			response := map[string]string{"description": string(txt)}
 			w.Header().Set("Content-Type", "application/json")
-			if err := json.NewEncoder(w).Encode(response); err != nil {
-				log.Printf("JSON Encode Error: %v", err)
-			}
+			json.NewEncoder(w).Encode(response)
 			return
 		}
 	}
 	http.Error(w, "No response from AI", http.StatusInternalServerError)
 }
 
-// リペア診断 (既存)
+// HandleAnalyzeImage: リペア診断
 func (c *GeminiController) HandleAnalyzeImage(w http.ResponseWriter, r *http.Request) {
 	c.analyzeImageCommon(w, r, "repair")
 }
 
-// ★ 新機能: 出品用AIアシスタント
+// HandleAnalyzeListing: 出品用AIアシスタント (自動保存なし)
 func (c *GeminiController) HandleAnalyzeListing(w http.ResponseWriter, r *http.Request) {
 	c.analyzeImageCommon(w, r, "listing")
 }
@@ -103,11 +98,9 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 	filename := strings.ToLower(header.Filename)
 	if strings.HasSuffix(filename, ".png") {
 		imageFormat = "png"
-	}
-	if strings.HasSuffix(filename, ".webp") {
+	} else if strings.HasSuffix(filename, ".webp") {
 		imageFormat = "webp"
-	}
-	if strings.HasSuffix(filename, ".heic") {
+	} else if strings.HasSuffix(filename, ".heic") {
 		imageFormat = "heic"
 	}
 
@@ -120,11 +113,11 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 	}
 	defer client.Close()
 
-	model := client.GenerativeModel("gemini-2.0-flash")
+	// ★修正: 変数名を model から genModel に変更
+	genModel := client.GenerativeModel("gemini-2.0-flash")
 
 	var promptText string
 	if mode == "repair" {
-		// リペア診断用のプロンプト
 		promptText = `あなたはプロのリペア職人です。画像を分析しJSONのみ返してください。Markdown不要。
 {
   "item_name": "商品名",
@@ -139,13 +132,12 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
   "safety_reason": "安全"
 }`
 	} else {
-		// ★ 出品用のプロンプト
 		promptText = `あなたはフリマアプリの出品代行AIです。画像を分析し、売れやすい商品情報をJSONのみで返してください。Markdown不要。
 {
   "title": "キャッチーな商品名（40文字以内）",
   "description": "検索にヒットしやすい魅力的な商品説明文（200文字程度）。状態や特徴を含める。",
   "category": "最適なカテゴリ名",
-  "tags": ["タグ1", "タグ2", "タグ3", "タグ4", "タグ5"],
+  "tags": ["タグ1", "タグ2", "タグ3"],
   "suggested_price": 5000
 }`
 	}
@@ -155,7 +147,7 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 		genai.Text(promptText),
 	}
 
-	resp, err := model.GenerateContent(ctx, prompt...)
+	resp, err := genModel.GenerateContent(ctx, prompt...)
 	if err != nil {
 		log.Printf("Gemini Error: %v", err)
 		http.Error(w, "AI生成エラー", http.StatusInternalServerError)
@@ -166,6 +158,8 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
 			cleanTxt := strings.ReplaceAll(string(txt), "```json", "")
 			cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
+
+			// ★修正: 自動保存はせず、JSONをそのままフロントエンドに返すだけにする
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(cleanTxt))
 			return

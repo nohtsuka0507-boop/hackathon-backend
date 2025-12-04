@@ -18,8 +18,11 @@ func NewItemController(itemDAO *dao.ItemDAO) *ItemController {
 	return &ItemController{ItemDAO: itemDAO}
 }
 
-// 商品一覧を返す (GET /items)
+// HandleGetItems: 商品一覧を返す (GET /items)
 func (c *ItemController) HandleGetItems(w http.ResponseWriter, r *http.Request) {
+	// ログを出力して動作確認
+	log.Println("Handling GetItems request...")
+
 	items, err := c.ItemDAO.GetAll()
 	if err != nil {
 		log.Printf("fail: get all items, %v\n", err)
@@ -27,13 +30,14 @@ func (c *ItemController) HandleGetItems(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	log.Printf("Success: Got %d items from DB\n", len(items))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(items)
 }
 
-// 商品を購入する (POST /items/purchase)
+// HandlePurchase: 商品を購入する (POST /items/purchase)
 func (c *ItemController) HandlePurchase(w http.ResponseWriter, r *http.Request) {
-	// URLクエリからIDを取得する場合: /items/purchase?id=1
 	id := r.URL.Query().Get("id")
 	if id == "" {
 		w.WriteHeader(http.StatusBadRequest)
@@ -50,19 +54,24 @@ func (c *ItemController) HandlePurchase(w http.ResponseWriter, r *http.Request) 
 	fmt.Fprintf(w, `{"message": "Purchase successful"}`)
 }
 
-// 商品を出品する (POST /items)
+// HandleAddItem: 商品を出品する (POST /items)
 func (c *ItemController) HandleAddItem(w http.ResponseWriter, r *http.Request) {
+	log.Println("Handling AddItem request...")
+
 	var req struct {
 		Name        string `json:"name"`
 		Price       int    `json:"price"`
 		Description string `json:"description"`
+		ImageURL    string `json:"image_url"`
 	}
+	// リクエストボディの読み込みエラーを確認
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		log.Printf("fail: decode request body, %v\n", err)
 		w.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// ID生成 (簡易的なランダムID)
+	// ID生成
 	id, _ := generateItemID()
 
 	item := &model.Item{
@@ -70,13 +79,19 @@ func (c *ItemController) HandleAddItem(w http.ResponseWriter, r *http.Request) {
 		Name:        req.Name,
 		Price:       req.Price,
 		Description: req.Description,
+		ImageURL:    req.ImageURL,
 	}
+
+	// 画像サイズのログ（デバッグ用）
+	log.Printf("Inserting item: %s (Price: %d), Image length: %d\n", item.Name, item.Price, len(item.ImageURL))
 
 	if err := c.ItemDAO.Insert(item); err != nil {
 		log.Printf("fail: insert item, %v\n", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+
+	log.Println("Success: Item inserted into DB")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(item)
