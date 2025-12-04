@@ -2,7 +2,6 @@ package controller
 
 import (
 	"encoding/json"
-	"fmt"
 	"hackathon-backend/dao"
 	"hackathon-backend/model"
 	"net/http"
@@ -12,7 +11,7 @@ type AuthController struct {
 	UserDAO *dao.UserDAO
 }
 
-// ★修正: sql.DB ではなく UserDAO を受け取るように変更
+// NewAuthController: コンストラクタ
 func NewAuthController(userDAO *dao.UserDAO) *AuthController {
 	return &AuthController{UserDAO: userDAO}
 }
@@ -72,7 +71,14 @@ func (c *AuthController) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ログイン成功
+	// 3. ログイン成功レスポンス（フロントエンドの形式に合わせる）
 	w.Header().Set("Content-Type", "application/json")
-	fmt.Fprintf(w, `{"message": "Login successful", "user_id": "%s", "name": "%s"}`, user.ID, user.Name)
+
+	// Auth.tsx は { token: "...", user: {...} } を待っています
+	response := map[string]interface{}{
+		"token": "mock-token-12345", // ダミーのトークン
+		"user":  user,               // ユーザー情報
+	}
+
+	json.NewEncoder(w).Encode(response)
 }
