@@ -20,7 +20,7 @@ import (
 func main() {
 
 	// ログを目立たせて更新確認しやすくします
-	log.Println("🔥🔥🔥 UPDATED VERSION: Like Feature Added 🔥🔥🔥")
+	log.Println("🔥🔥🔥 UPDATED VERSION: DB Optimization Only 🔥🔥🔥")
 
 	// --- 0. 環境変数の読み込み ---
 	if err := godotenv.Load(); err != nil {
@@ -54,13 +54,13 @@ func main() {
 
 	// --- 2. 依存関係の注入 (DI) ---
 
-	// DAOの初期化
+	// DAO
 	userDAO := dao.NewUserDAO(db)
 	itemDAO := dao.NewItemDAO(db)
 	messageDAO := dao.NewMessageDAO(db)
-	likeDAO := dao.NewLikeDAO(db) // ★追加: いいね用DAO
+	likeDAO := dao.NewLikeDAO(db)
 
-	// コントローラー・ユースケースの初期化
+	// Controller & Usecase
 	authController := controller.NewAuthController(userDAO)
 
 	searchUserUsecase := usecase.NewSearchUserUsecase(userDAO)
@@ -71,7 +71,7 @@ func main() {
 	itemController := controller.NewItemController(itemDAO)
 	geminiController := controller.NewGeminiController(itemDAO)
 	chatController := controller.NewChatController(messageDAO)
-	likeController := controller.NewLikeController(likeDAO) // ★追加: いいね用コントローラー
+	likeController := controller.NewLikeController(likeDAO)
 
 	// --- 3. ルーティング設定 ---
 	mux := http.NewServeMux()
@@ -125,7 +125,7 @@ func main() {
 		}
 	})
 
-	// AI
+	// AI関連 (画像認識などはそのまま維持)
 	mux.HandleFunc("/generate-description", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			geminiController.HandleGenerate(w, r)
@@ -162,14 +162,12 @@ func main() {
 		}
 	})
 
-	// ★追加: いいね機能
+	// いいね機能
 	mux.HandleFunc("/likes", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodPost:
-			// いいねの切り替え (ON/OFF)
 			likeController.HandleToggleLike(w, r)
 		case http.MethodGet:
-			// 自分がいいねした商品一覧を取得
 			likeController.HandleGetLikes(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -182,7 +180,6 @@ func main() {
 		port = "8080"
 	}
 
-	// CORSミドルウェアを適用
 	srv := &http.Server{
 		Addr:    ":" + port,
 		Handler: enableCORS(mux),
@@ -201,7 +198,7 @@ func main() {
 	log.Println("Shutting down server...")
 }
 
-// enableCORS: CORS設定 (変更なし)
+// enableCORS: CORS設定
 func enableCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -217,6 +214,7 @@ func enableCORS(next http.Handler) http.Handler {
 	})
 }
 
+// createTables: テーブル作成とインデックス追加
 func createTables(db *sql.DB) error {
 	// Itemテーブル
 	queryItem := `
@@ -257,8 +255,7 @@ func createTables(db *sql.DB) error {
 		return fmt.Errorf("create messages table error: %w", err)
 	}
 
-	// ★追加: いいねテーブル
-	// ユーザーIDと商品IDのペアで保存
+	// いいねテーブル
 	queryLikes := `
     CREATE TABLE IF NOT EXISTS likes (
         user_id VARCHAR(255),
@@ -268,6 +265,16 @@ func createTables(db *sql.DB) error {
     );`
 	if _, err := db.Exec(queryLikes); err != nil {
 		return fmt.Errorf("create likes table error: %w", err)
+	}
+
+	// ★追加: 検索を高速化するためのインデックス (目次)
+	// これにより、メッセージが増えてもチャット画面が遅くなりません
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_item_id ON messages (item_id);"); err != nil {
+		log.Printf("Note: index creation (messages) might affect: %v", err)
+	}
+	// これにより、いいねの表示が高速化されます
+	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_likes_user_id ON likes (user_id);"); err != nil {
+		log.Printf("Note: index creation (likes) might affect: %v", err)
 	}
 
 	return nil
