@@ -20,7 +20,7 @@ import (
 func main() {
 
 	// ログを目立たせて更新確認しやすくします
-	log.Println("🔥🔥🔥 UPDATED VERSION: DB Optimization Only 🔥🔥🔥")
+	log.Println("🔥🔥🔥 UPDATED VERSION: AI Safety Check Added 🔥🔥🔥")
 
 	// --- 0. 環境変数の読み込み ---
 	if err := godotenv.Load(); err != nil {
@@ -125,7 +125,7 @@ func main() {
 		}
 	})
 
-	// AI関連 (画像認識などはそのまま維持)
+	// AI関連
 	mux.HandleFunc("/generate-description", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			geminiController.HandleGenerate(w, r)
@@ -145,6 +145,15 @@ func main() {
 	mux.HandleFunc("/analyze-listing", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			geminiController.HandleAnalyzeListing(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// ★追加: AI不適切コンテンツチェック
+	mux.HandleFunc("/check-content", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			geminiController.HandleCheckContent(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -267,12 +276,10 @@ func createTables(db *sql.DB) error {
 		return fmt.Errorf("create likes table error: %w", err)
 	}
 
-	// ★追加: 検索を高速化するためのインデックス (目次)
-	// これにより、メッセージが増えてもチャット画面が遅くなりません
+	// 検索を高速化するためのインデックス (目次)
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_item_id ON messages (item_id);"); err != nil {
 		log.Printf("Note: index creation (messages) might affect: %v", err)
 	}
-	// これにより、いいねの表示が高速化されます
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_likes_user_id ON likes (user_id);"); err != nil {
 		log.Printf("Note: index creation (likes) might affect: %v", err)
 	}

@@ -43,7 +43,6 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 	}
 	defer client.Close()
 
-	// ★修正: 変数名を model から genModel に変更
 	genModel := client.GenerativeModel("gemini-2.0-flash")
 	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、テキストのみで返してください。", req.ProductName)
 
@@ -70,7 +69,7 @@ func (c *GeminiController) HandleAnalyzeImage(w http.ResponseWriter, r *http.Req
 	c.analyzeImageCommon(w, r, "repair")
 }
 
-// HandleAnalyzeListing: 出品用AIアシスタント (自動保存なし)
+// HandleAnalyzeListing: 出品用AIアシスタント
 func (c *GeminiController) HandleAnalyzeListing(w http.ResponseWriter, r *http.Request) {
 	c.analyzeImageCommon(w, r, "listing")
 }
@@ -113,7 +112,6 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 	}
 	defer client.Close()
 
-	// ★修正: 変数名を model から genModel に変更
 	genModel := client.GenerativeModel("gemini-2.0-flash")
 
 	var promptText string
@@ -158,12 +156,70 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
 			cleanTxt := strings.ReplaceAll(string(txt), "```json", "")
 			cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
-
-			// ★修正: 自動保存はせず、JSONをそのままフロントエンドに返すだけにする
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(cleanTxt))
 			return
 		}
 	}
 	http.Error(w, "AI応答なし", http.StatusInternalServerError)
+}
+
+// ★追加: チャットの不適切発言チェック
+func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Request) {
+	// 1. リクエストからテキストを取り出す
+	var req struct {
+		Content string `json:"content"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// 2. Geminiクライアントの準備
+	ctx := context.Background()
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
+	if err != nil {
+		log.Printf("Failed to create client: %v", err)
+		http.Error(w, "AI init failed", http.StatusInternalServerError)
+		return
+	}
+	defer client.Close()
+
+	// 3. AIへの命令（プロンプト）
+	genModel := client.GenerativeModel("gemini-2.0-flash")
+	prompt := fmt.Sprintf(`あなたはコンテンツモデレーターです。以下のメッセージが「攻撃的」「暴力的」「差別的」「性的」な内容を含むか判定してください。
+
+メッセージ: "%s"
+
+判定ルール:
+- 問題がある場合は "UNSAFE" とだけ答えてください。
+- 問題がない場合は "SAFE" とだけ答えてください。
+- 余計な説明は一切不要です。`, req.Content)
+
+	// 4. AIに聞く
+	resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
+	if err != nil {
+		log.Printf("Gemini Check Error: %v", err)
+		// エラー時は一旦通す
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"is_safe": true})
+		return
+	}
+
+	// 5. 結果を解析
+	isSafe := true
+	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
+		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
+			answer := strings.TrimSpace(string(txt))
+			// AIが "UNSAFE" と言ったらアウト
+			if strings.Contains(answer, "UNSAFE") {
+				isSafe = false
+			}
+		}
+	}
+
+	// 6. 結果を返す
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"is_safe": isSafe})
 }
