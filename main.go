@@ -19,7 +19,9 @@ import (
 
 func main() {
 
-	log.Println("🔥🔥🔥 UPDATED VERSION: Chat Feature Added 🔥🔥🔥")
+	// ログを目立たせて更新確認しやすくします
+	log.Println("🔥🔥🔥 UPDATED VERSION: Like Feature Added 🔥🔥🔥")
+
 	// --- 0. 環境変数の読み込み ---
 	if err := godotenv.Load(); err != nil {
 		log.Println("Note: .env file not found")
@@ -55,7 +57,8 @@ func main() {
 	// DAOの初期化
 	userDAO := dao.NewUserDAO(db)
 	itemDAO := dao.NewItemDAO(db)
-	messageDAO := dao.NewMessageDAO(db) // チャット用DAO
+	messageDAO := dao.NewMessageDAO(db)
+	likeDAO := dao.NewLikeDAO(db) // ★追加: いいね用DAO
 
 	// コントローラー・ユースケースの初期化
 	authController := controller.NewAuthController(userDAO)
@@ -67,11 +70,10 @@ func main() {
 
 	itemController := controller.NewItemController(itemDAO)
 	geminiController := controller.NewGeminiController(itemDAO)
-	chatController := controller.NewChatController(messageDAO) // チャット用コントローラー
+	chatController := controller.NewChatController(messageDAO)
+	likeController := controller.NewLikeController(likeDAO) // ★追加: いいね用コントローラー
 
 	// --- 3. ルーティング設定 ---
-	// Go 1.22未満でも動くように、メソッド指定("GET /path")ではなくパスのみを指定し、
-	// 内部でメソッド分岐を行う方式に変更しました。
 	mux := http.NewServeMux()
 
 	// 認証
@@ -91,7 +93,7 @@ func main() {
 		}
 	})
 
-	// ユーザー (GETとPOSTを統合)
+	// ユーザー
 	mux.HandleFunc("/user", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -103,7 +105,7 @@ func main() {
 		}
 	})
 
-	// 商品 (GETとPOSTを統合)
+	// 商品
 	mux.HandleFunc("/items", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -148,13 +150,27 @@ func main() {
 		}
 	})
 
-	// ★修正: チャット (GETとPOSTを統合)
+	// チャット
 	mux.HandleFunc("/messages", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			chatController.HandleGetMessages(w, r)
 		case http.MethodPost:
 			chatController.HandlePostMessage(w, r)
+		default:
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// ★追加: いいね機能
+	mux.HandleFunc("/likes", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			// いいねの切り替え (ON/OFF)
+			likeController.HandleToggleLike(w, r)
+		case http.MethodGet:
+			// 自分がいいねした商品一覧を取得
+			likeController.HandleGetLikes(w, r)
 		default:
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -188,12 +204,10 @@ func main() {
 // enableCORS: CORS設定 (変更なし)
 func enableCORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// フロントエンドのオリジンに合わせて調整してください。"*" は全許可です。
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, DELETE")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
-		// Preflightリクエスト(OPTIONS)の場合はここで200 OKを返して終了
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusOK)
 			return
@@ -241,6 +255,19 @@ func createTables(db *sql.DB) error {
     );`
 	if _, err := db.Exec(queryMsg); err != nil {
 		return fmt.Errorf("create messages table error: %w", err)
+	}
+
+	// ★追加: いいねテーブル
+	// ユーザーIDと商品IDのペアで保存
+	queryLikes := `
+    CREATE TABLE IF NOT EXISTS likes (
+        user_id VARCHAR(255),
+        item_id VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (user_id, item_id)
+    );`
+	if _, err := db.Exec(queryLikes); err != nil {
+		return fmt.Errorf("create likes table error: %w", err)
 	}
 
 	return nil
