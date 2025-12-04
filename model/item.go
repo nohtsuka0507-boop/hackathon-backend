@@ -6,6 +6,7 @@ type Item struct {
 	Price       int    `json:"price"`
 	Description string `json:"description"`
 	SoldOut     bool   `json:"sold_out"`
-	// ★追加: 画像データを保存・表示するためのフィールド
-	ImageURL string `json:"image_url"`
+	ImageURL    string `json:"image_url"`
+	// ★追加: いいねの数を格納するフィールド
+	LikeCount int `json:"like_count"`
 }
