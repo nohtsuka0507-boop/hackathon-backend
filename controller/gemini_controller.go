@@ -44,7 +44,7 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 	defer client.Close()
 
 	// ★修正: 最新ライブラリならこれで動くはずです
-	genModel := client.GenerativeModel("gemini-1.5-flash")
+	genModel := client.GenerativeModel("gemini-2.0-flash-exp")
 	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、テキストのみで返してください。", req.ProductName)
 
 	resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
@@ -114,7 +114,7 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 	defer client.Close()
 
 	// ★修正: gemini-1.5-flash
-	genModel := client.GenerativeModel("gemini-1.5-flash")
+	genModel := client.GenerativeModel("gemini-2.0-flash-exp")
 
 	var promptText string
 	if mode == "repair" {
@@ -187,7 +187,7 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 	defer client.Close()
 
 	// ★修正: gemini-1.5-flash
-	genModel := client.GenerativeModel("gemini-1.5-flash")
+	genModel := client.GenerativeModel("gemini-2.0-flash-exp")
 	prompt := fmt.Sprintf(`あなたはコンテンツモデレーターです。以下のメッセージが「攻撃的」「暴力的」「差別的」「性的」な内容を含むか判定してください。
 
 メッセージ: "%s"
