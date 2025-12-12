@@ -4,7 +4,7 @@ go 1.24.0
 
 require (
 	github.com/go-sql-driver/mysql v1.9.3
-	github.com/google/generative-ai-go v0.13.0
+	github.com/google/generative-ai-go v0.18.0
 	github.com/joho/godotenv v1.5.1
 	github.com/oklog/ulid/v2 v2.1.1
 	google.golang.org/api v0.257.0

@@ -1,5 +1,5 @@
-# 1. ビルド用環境 (Goのコンパイルを行う)
-FROM golang:1.25-alpine AS builder
+# 1. ビルド環境 (Go 1.24 を指定して環境を作ります)
+FROM golang:1.24-bookworm as builder
 
 # 作業ディレクトリを作成
 WORKDIR /app
@@ -8,27 +8,23 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 
-# ソースコードを全てコピー
+# ソースコードをコピーしてビルド
 COPY . .
-
+# 念のためビルド中に整理
 RUN go mod tidy
-# バイナリファイル（実行ファイル）をビルド
-# CGO_ENABLED=0 は軽量なAlpine Linuxで動かすために必須
-RUN CGO_ENABLED=0 GOOS=linux go build -o main .
+RUN go build -v -o server .
 
-# 2. 実行用環境 (完成したバイナリだけを乗せる軽量環境)
-FROM alpine:latest
+# 2. 実行環境 (軽量なLinuxを使います)
+FROM debian:bookworm-slim
+RUN set -x && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+    ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
 
-# セキュリティ証明書を入れる（外部API通信に必要）
-RUN apk --no-cache add ca-certificates
+# ビルドしたアプリをコピー
+COPY --from=builder /app/server /server
 
-WORKDIR /root/
+# ポート8080を開放する設定
+ENV PORT 8080
 
-# ビルド環境から実行ファイルだけをコピー
-COPY --from=builder /app/main .
-
-# ポート8080を開ける
-EXPOSE 8080
-
-# サーバー起動
-CMD ["./main"]
+# アプリを起動
+CMD ["/server"]
