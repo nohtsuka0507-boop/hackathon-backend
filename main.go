@@ -286,3 +286,5 @@ func createTables(db *sql.DB) error {
 
 	return nil
 }
+
+// Force rebuild
