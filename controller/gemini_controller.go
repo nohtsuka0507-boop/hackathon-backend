@@ -21,7 +21,7 @@ func NewGeminiController(itemDAO *dao.ItemDAO) *GeminiController {
 	return &GeminiController{ItemDAO: itemDAO}
 }
 
-// リクエスト構造体（厳密なAPI仕様に合わせて定義）
+// --- リクエスト/レスポンス用の構造体 ---
 type GeminiRequest struct {
 	Contents         []Content        `json:"contents"`
 	GenerationConfig GenerationConfig `json:"generationConfig"`
@@ -60,18 +60,38 @@ type GeminiResponse struct {
 	} `json:"error"`
 }
 
+// デバッグ用: 利用可能なモデル一覧を取得してログに出す
+func logAvailableModels(apiKey string) {
+	url := "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("Failed to list models: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	// ログが長すぎると切れることがあるので、改行をスペースに置換
+	log.Printf("【DEBUG】Available Models: %s", strings.ReplaceAll(string(body), "\n", " "))
+}
+
 // 共通: Gemini API呼び出し
 func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
-	// APIキーの空白除去
 	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 	if apiKey == "" {
 		log.Println("【致命的エラー】GEMINI_API_KEY が環境変数に設定されていません。")
 		return "", fmt.Errorf("API Key is missing")
 	}
 
-	// ★修正点: モデル名を「gemini-1.5-flash-latest」に変更
-	// これで最新の有効なバージョンを確実に指します
-	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=" + apiKey
+	// ★本命: 最新の安定版 "gemini-1.5-flash-002" を指定
+	modelName := "gemini-1.5-flash-002"
+	url := "https://generativelanguage.googleapis.com/v1beta/models/" + modelName + ":generateContent?key=" + apiKey
+
+	// ログ確認用
+	maskedKey := apiKey
+	if len(apiKey) > 8 {
+		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
+	}
+	log.Printf("Gemini Request (%s) Start. Key: %s", modelName, maskedKey)
 
 	parts := []Part{{Text: promptText}}
 	if len(imageData) > 0 {
@@ -107,9 +127,15 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	logBody := strings.ReplaceAll(string(bodyBytes), "\n", " ")
-	log.Printf("Gemini Response Status: %d, Body: %s", resp.StatusCode, logBody)
+
+	// ステータスコードが404なら「モデルが見つからない」ので、一覧をログに出してあげる
+	if resp.StatusCode == 404 {
+		log.Printf("【エラー】モデル %s が見つかりませんでした (404)。利用可能なモデル一覧を取得します...", modelName)
+		logAvailableModels(apiKey)
+	}
 
 	if resp.StatusCode != 200 {
+		log.Printf("Gemini Error Body: %s", logBody)
 		return "", fmt.Errorf("API Error (%d): %s", resp.StatusCode, logBody)
 	}
 
