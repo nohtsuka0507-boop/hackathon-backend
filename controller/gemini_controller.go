@@ -21,7 +21,7 @@ func NewGeminiController(itemDAO *dao.ItemDAO) *GeminiController {
 	return &GeminiController{ItemDAO: itemDAO}
 }
 
-// リクエスト構造体
+// リクエスト構造体（厳密なAPI仕様に合わせて定義）
 type GeminiRequest struct {
 	Contents         []Content        `json:"contents"`
 	GenerationConfig GenerationConfig `json:"generationConfig"`
@@ -62,24 +62,16 @@ type GeminiResponse struct {
 
 // 共通: Gemini API呼び出し
 func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
-	// APIキーの前後の空白・改行を完全削除（これが重要！）
+	// APIキーの空白除去
 	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
-
 	if apiKey == "" {
 		log.Println("【致命的エラー】GEMINI_API_KEY が環境変数に設定されていません。")
 		return "", fmt.Errorf("API Key is missing")
 	}
 
-	// ログ確認用
-	maskedKey := apiKey
-	if len(apiKey) > 8 {
-		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
-	}
-	log.Printf("Gemini Request Start. Key: %s, ImageSize: %d bytes", maskedKey, len(imageData))
-
-	// ★修正点: モデル名を汎用的な「gemini-1.5-flash」に戻しました。
-	// これにより、Google側で自動的に利用可能な最新バージョン（001か002など）に割り振られます。
-	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey
+	// ★修正点: モデル名を「gemini-1.5-flash-latest」に変更
+	// これで最新の有効なバージョンを確実に指します
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=" + apiKey
 
 	parts := []Part{{Text: promptText}}
 	if len(imageData) > 0 {
