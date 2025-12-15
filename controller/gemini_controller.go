@@ -62,7 +62,7 @@ type GeminiResponse struct {
 
 // 共通: Gemini API呼び出し
 func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
-	// ★修正点1: APIキーの前後の空白・改行を完全削除（事故防止）
+	// APIキーの前後の空白・改行を完全削除（これが重要！）
 	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 
 	if apiKey == "" {
@@ -70,16 +70,16 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 		return "", fmt.Errorf("API Key is missing")
 	}
 
-	// ログ確認用（キーの一部を表示）
+	// ログ確認用
 	maskedKey := apiKey
 	if len(apiKey) > 8 {
 		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
 	}
 	log.Printf("Gemini Request Start. Key: %s, ImageSize: %d bytes", maskedKey, len(imageData))
 
-	// ★修正点2: モデル名を「gemini-1.5-flash」から「gemini-1.5-flash-001」に固定
-	// エイリアスではなく実体名を指定することで NOT_FOUND を防ぎます
-	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key=" + apiKey
+	// ★修正点: モデル名を汎用的な「gemini-1.5-flash」に戻しました。
+	// これにより、Google側で自動的に利用可能な最新バージョン（001か002など）に割り振られます。
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey
 
 	parts := []Part{{Text: promptText}}
 	if len(imageData) > 0 {
@@ -114,8 +114,6 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
-
-	// ログが改行で切れないように整形
 	logBody := strings.ReplaceAll(string(bodyBytes), "\n", " ")
 	log.Printf("Gemini Response Status: %d, Body: %s", resp.StatusCode, logBody)
 
