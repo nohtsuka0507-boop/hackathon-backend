@@ -71,12 +71,6 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	modelName := "gemini-2.5-flash"
 	url := "https://generativelanguage.googleapis.com/v1beta/models/" + modelName + ":generateContent?key=" + apiKey
 
-	maskedKey := apiKey
-	if len(apiKey) > 8 {
-		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
-	}
-	log.Printf("Gemini Request (%s) Start. Key: %s", modelName, maskedKey)
-
 	parts := []Part{{Text: promptText}}
 	if len(imageData) > 0 {
 		base64Data := base64.StdEncoding.EncodeToString(imageData)
@@ -133,7 +127,7 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	return "", fmt.Errorf("no response from AI")
 }
 
-// HandleGenerate: テキスト生成
+// HandleGenerate: 商品説明文生成
 func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ProductName string `json:"productName"`
@@ -162,7 +156,7 @@ func (c *GeminiController) HandleAnalyzeListing(w http.ResponseWriter, r *http.R
 	c.analyzeImageCommon(w, r, "listing")
 }
 
-// 共通処理
+// 共通処理: 画像分析
 func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Request, mode string) {
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		http.Error(w, "画像サイズ過大", http.StatusBadRequest)
@@ -192,7 +186,6 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 
 	var promptText string
 	if mode == "repair" {
-		// ★ここを強化！プロに頼んだ場合の見積もりも出させる
 		promptText = `あなたはプロのリペア職人兼、フリマアプリの相場師です。
 アップロードされた画像の商品の状態を分析し、以下のJSON形式でのみ回答してください。Markdownは不要です。
 
@@ -205,11 +198,9 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
   "current_value": 現在の状態でのメルカリ想定価格（数値）,
   "future_value": 修理後のメルカリ想定価格（数値）,
   "estimated_profit": future_value - current_value の計算結果（数値）,
-  
   "pro_service_cost": 専門業者に修理を依頼した場合の想定費用（数値。高めに設定せよ）,
   "shipping_cost": 往復の想定送料（数値。例:1500）,
   "pro_profit": future_value - pro_service_cost - shipping_cost の計算結果（数値。マイナスになっても良い）,
-
   "advice": "アドバイス"
 }`
 	} else {
@@ -234,7 +225,7 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 	w.Write([]byte(cleanTxt))
 }
 
-// チャットチェック
+// HandleCheckContent: 不適切コンテンツチェック
 func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
@@ -253,4 +244,37 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"is_safe": isSafe})
+}
+
+// ★追加: 職人チャット機能
+func (c *GeminiController) HandleCraftsmanChat(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// 職人「山田匠」のペルソナ定義
+	prompt := fmt.Sprintf(`
+あなたは「Re:Value」専属のベテランリペア職人「山田匠（やまだ たくみ）」です。
+以下の設定を守って回答してください。
+・一人称は「私」または「職人」、口調は丁寧だが少し職人気質な「〜ですね」「〜だと思いますよ」という温かい口調。
+・ユーザーはリペア初心者です。難しそうな専門用語は避けて、100均やホームセンターで買える道具を使った解決策を提案してください。
+・JSON形式 {"reply": "..."} で返答してください。
+
+ユーザーの質問: "%s"
+`, req.Message)
+
+	result, err := c.callGeminiAPI(prompt, nil, "")
+	if err != nil {
+		http.Error(w, "AI Error", http.StatusInternalServerError)
+		return
+	}
+
+	cleanTxt := strings.ReplaceAll(result, "```json", "")
+	cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(cleanTxt))
 }
