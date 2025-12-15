@@ -68,12 +68,9 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 		return "", fmt.Errorf("API Key is missing")
 	}
 
-	// ★修正: ログで確認された、確実に存在する最新安定版モデルを指定
 	modelName := "gemini-2.5-flash"
-
 	url := "https://generativelanguage.googleapis.com/v1beta/models/" + modelName + ":generateContent?key=" + apiKey
 
-	// ログ確認用
 	maskedKey := apiKey
 	if len(apiKey) > 8 {
 		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
@@ -195,18 +192,20 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 
 	var promptText string
 	if mode == "repair" {
-		promptText = `あなたはプロのリペア職人です。画像を分析し以下のJSONスキーマに従って情報を返してください。
+		// ★ここを強化！AIに「利益」や「難易度」まで計算させるプロンプトに変更
+		promptText = `あなたはプロのリペア職人兼、フリマアプリの相場師です。
+アップロードされた画像の商品の状態を分析し、以下のJSON形式でのみ回答してください。Markdownは不要です。
+
 {
-  "item_name": "商品名",
-  "damage_check": "状態",
-  "repair_plan": "リペア案",
-  "repair_cost": 3000,
-  "current_value": 1000, 
-  "future_value": 5000,
-  "profit_message": "利益アップ！",
-  "is_worth_repairing": true,
-  "is_safe": true,
-  "safety_reason": "安全"
+  "item_name": "商品の推測名（例: 本革のビジネスバッグ）",
+  "damage_check": "破損箇所の具体的な指摘（例: ハンドルの付け根が千切れている、角擦れがある）",
+  "repair_plan": "具体的な修理手順（例: 1.革用接着剤で仮止め 2.麻糸で補強縫い 3.コバコートを塗る）",
+  "difficulty": "修理難易度（5段階評価の数字のみ。例: 3）",
+  "required_tools": ["必要な道具1", "必要な道具2", "必要な道具3"],
+  "current_value": 現在の状態でのメルカリ想定販売価格（数値のみ。例: 1500）,
+  "future_value": 修理して綺麗にした場合のメルカリ想定販売価格（数値のみ。例: 6000）,
+  "estimated_profit": future_value - current_value の計算結果（数値のみ。例: 4500）,
+  "advice": "高く売るためのワンポイントアドバイス（例: 写真を撮るときは自然光で、傷が目立たない角度を探しましょう）"
 }`
 	} else {
 		promptText = `あなたはフリマアプリの出品代行AIです。画像を分析し、売れやすい商品情報を以下のJSONスキーマに従って返してください。
