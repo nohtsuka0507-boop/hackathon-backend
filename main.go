@@ -171,6 +171,7 @@ func main() {
 		}
 	})
 
+	// update
 	// いいね機能
 	mux.HandleFunc("/likes", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
