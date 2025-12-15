@@ -1,83 +1,61 @@
-package dao
+package controller
 
 import (
-	"database/sql"
-	"hackathon-backend/model"
+	"encoding/json"
+	"hackathon-backend/dao"
 	"log"
+	"net/http"
 )
 
-type ItemDAO struct {
-	DB *sql.DB
+type LikeController struct {
+	LikeDAO *dao.LikeDAO
 }
 
-func NewItemDAO(db *sql.DB) *ItemDAO {
-	// ★自動修復機能: アプリ起動時に「like_count」カラムがなければ勝手に追加する
-	// (既にカラムがある場合のエラーは無視して進む、というハッカソン用の一時的な処置です)
-	_, _ = db.Exec("ALTER TABLE items ADD COLUMN like_count INT DEFAULT 0")
-
-	return &ItemDAO{DB: db}
+func NewLikeController(likeDAO *dao.LikeDAO) *LikeController {
+	return &LikeController{LikeDAO: likeDAO}
 }
 
-// GetAll: 商品一覧取得（いいね数も含めて取得！）
-func (d *ItemDAO) GetAll() ([]*model.Item, error) {
-	// クエリに like_count を追加
-	query := "SELECT id, name, price, description, sold_out, image_url, like_count FROM items"
+// HandleToggleLike: いいねの切り替え
+func (c *LikeController) HandleToggleLike(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		UserID string `json:"user_id"`
+		ItemID string `json:"item_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
 
-	rows, err := d.DB.Query(query)
+	isLiked, err := c.LikeDAO.ToggleLike(req.UserID, req.ItemID)
 	if err != nil {
-		log.Printf("GetAll Error: %v", err)
-		return nil, err
+		log.Printf("【いいねエラー】ToggleLike Failed: %v", err)
+		http.Error(w, "Server Error: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
-	defer rows.Close()
 
-	return d.scanItems(rows)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]bool{"liked": isLiked})
 }
 
-// Search: 検索機能（いいね数も含めて取得！）
-func (d *ItemDAO) Search(keyword string) ([]*model.Item, error) {
-	query := "SELECT id, name, price, description, sold_out, image_url, like_count FROM items WHERE name LIKE ?"
-	searchTerm := "%" + keyword + "%"
+// HandleGetLikes: いいね一覧の取得
+func (c *LikeController) HandleGetLikes(w http.ResponseWriter, r *http.Request) {
+	userID := r.URL.Query().Get("user_id")
+	if userID == "" {
+		http.Error(w, "user_id required", http.StatusBadRequest)
+		return
+	}
 
-	rows, err := d.DB.Query(query, searchTerm)
+	ids, err := c.LikeDAO.GetLikedItemIDs(userID)
 	if err != nil {
-		log.Printf("Search Error: %v", err)
-		return nil, err
+		log.Printf("【いいね取得エラー】GetLikedItemIDs Failed: %v", err)
+		http.Error(w, "Server Error", http.StatusInternalServerError)
+		return
 	}
-	defer rows.Close()
 
-	return d.scanItems(rows)
-}
-
-// scanItems: データを読み込む共通処理
-func (d *ItemDAO) scanItems(rows *sql.Rows) ([]*model.Item, error) {
-	var items []*model.Item
-	for rows.Next() {
-		item := &model.Item{}
-		var imageURL sql.NullString
-
-		// ★修正: データベースから like_count をしっかり読み込む
-		if err := rows.Scan(&item.ID, &item.Name, &item.Price, &item.Description, &item.SoldOut, &imageURL, &item.LikeCount); err != nil {
-			return nil, err
-		}
-
-		if imageURL.Valid {
-			item.ImageURL = imageURL.String
-		}
-		items = append(items, item)
+	if ids == nil {
+		ids = []string{}
 	}
-	return items, nil
-}
 
-// Purchase: 購入処理
-func (d *ItemDAO) Purchase(id string) error {
-	_, err := d.DB.Exec("UPDATE items SET sold_out = TRUE WHERE id = ?", id)
-	return err
-}
-
-// Insert: 商品登録（初期のいいね数は0で登録）
-func (d *ItemDAO) Insert(item *model.Item) error {
-	// INSERT文にも like_count を追加（デフォルト0）
-	query := "INSERT INTO items (id, name, price, description, sold_out, image_url, like_count) VALUES (?, ?, ?, ?, ?, ?, 0)"
-	_, err := d.DB.Exec(query, item.ID, item.Name, item.Price, item.Description, false, item.ImageURL)
-	return err
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(ids)
 }
