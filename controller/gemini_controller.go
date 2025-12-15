@@ -21,7 +21,7 @@ func NewGeminiController(itemDAO *dao.ItemDAO) *GeminiController {
 	return &GeminiController{ItemDAO: itemDAO}
 }
 
-// --- リクエスト/レスポンス用の構造体 ---
+// リクエスト構造体
 type GeminiRequest struct {
 	Contents         []Content        `json:"contents"`
 	GenerationConfig GenerationConfig `json:"generationConfig"`
@@ -60,38 +60,9 @@ type GeminiResponse struct {
 	} `json:"error"`
 }
 
-// デバッグ用: 利用可能なモデル一覧を取得してログに出す
-func logAvailableModels(apiKey string) {
-	url := "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey
-	resp, err := http.Get(url)
-	if err != nil {
-		log.Printf("Failed to list models: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	// ログが長すぎると切れることがあるので、改行をスペースに置換
-	log.Printf("【DEBUG】Available Models: %s", strings.ReplaceAll(string(body), "\n", " "))
-}
-
-// 共通: Gemini API呼び出し
-func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
-	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
-	if apiKey == "" {
-		log.Println("【致命的エラー】GEMINI_API_KEY が環境変数に設定されていません。")
-		return "", fmt.Errorf("API Key is missing")
-	}
-
-	// ★本命: 最新の安定版 "gemini-1.5-flash-002" を指定
-	modelName := "gemini-1.5-flash-002"
-	url := "https://generativelanguage.googleapis.com/v1beta/models/" + modelName + ":generateContent?key=" + apiKey
-
-	// ログ確認用
-	maskedKey := apiKey
-	if len(apiKey) > 8 {
-		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
-	}
-	log.Printf("Gemini Request (%s) Start. Key: %s", modelName, maskedKey)
+// 単一のモデルで試行する関数
+func (c *GeminiController) tryModel(apiKey, modelName, promptText string, imageData []byte, mimeType string) (string, error) {
+	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", modelName, apiKey)
 
 	parts := []Part{{Text: promptText}}
 	if len(imageData) > 0 {
@@ -114,28 +85,31 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	jsonData, _ := json.Marshal(reqBody)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
 	if err != nil {
-		return "", err
+		return "", err // 内部エラー
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", err // ネットワークエラー
 	}
 	defer resp.Body.Close()
 
 	bodyBytes, _ := io.ReadAll(resp.Body)
-	logBody := strings.ReplaceAll(string(bodyBytes), "\n", " ")
 
-	// ステータスコードが404なら「モデルが見つからない」ので、一覧をログに出してあげる
+	// 404の場合は「このモデルは使えない」と判断してエラーを返す
 	if resp.StatusCode == 404 {
-		log.Printf("【エラー】モデル %s が見つかりませんでした (404)。利用可能なモデル一覧を取得します...", modelName)
-		logAvailableModels(apiKey)
+		return "", fmt.Errorf("NOT_FOUND")
+	}
+
+	// 429 (Resource Exhausted) の場合は、モデル自体は存在するので、API制限エラーとして返す
+	if resp.StatusCode == 429 {
+		return "", fmt.Errorf("QUOTA_EXCEEDED")
 	}
 
 	if resp.StatusCode != 200 {
-		log.Printf("Gemini Error Body: %s", logBody)
+		logBody := strings.ReplaceAll(string(bodyBytes), "\n", " ")
 		return "", fmt.Errorf("API Error (%d): %s", resp.StatusCode, logBody)
 	}
 
@@ -153,6 +127,71 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	}
 
 	return "", fmt.Errorf("no response from AI")
+}
+
+// 共通: Gemini API呼び出し（総当たり版）
+func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
+	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	if apiKey == "" {
+		log.Println("【致命的エラー】GEMINI_API_KEY が環境変数に設定されていません。")
+		return "", fmt.Errorf("API Key is missing")
+	}
+
+	// ★総当たりリスト: 使える可能性のあるモデル名を優先順に並べる
+	modelCandidates := []string{
+		"gemini-1.5-flash",     // 本命
+		"gemini-1.5-flash-001", // バージョン指定
+		"gemini-1.5-flash-002", // 新バージョン
+		"gemini-1.5-pro",       // Pro版（Flashダメならこれ）
+		"gemini-1.5-pro-001",
+		"gemini-pro",           // 旧バージョン (1.0)
+		"gemini-2.0-flash-exp", // 実験版（元々使っていたもの）
+	}
+
+	var lastError error
+
+	// 順番に試していく
+	for _, model := range modelCandidates {
+		log.Printf("Trying model: %s ...", model)
+		result, err := c.tryModel(apiKey, model, promptText, imageData, mimeType)
+
+		if err == nil {
+			log.Printf("SUCCESS with model: %s", model)
+			return result, nil
+		}
+
+		// エラー内容を確認
+		if err.Error() == "NOT_FOUND" {
+			log.Printf("Model %s not found. Skipping...", model)
+			lastError = err
+			continue // 次のモデルへ
+		}
+
+		// 404以外のエラー（API制限など）は、モデル自体は合っているのでそこで終了するか、続けるか判断
+		// ここではとりあえずログに出して次へ（別モデルなら枠が空いてる可能性もあるため）
+		log.Printf("Model %s failed with error: %v. Trying next...", model, err)
+		lastError = err
+	}
+
+	// 全部ダメだった場合
+	// 最後に、本当に使えるモデル一覧をログに出して死ぬ（デバッグ用）
+	log.Printf("【全滅】すべてのモデルで失敗しました。利用可能なモデルを確認します...")
+	logAvailableModels(apiKey)
+
+	return "", fmt.Errorf("All models failed. Last error: %v", lastError)
+}
+
+// デバッグ用: 利用可能なモデル一覧を取得
+func logAvailableModels(apiKey string) {
+	url := "https://generativelanguage.googleapis.com/v1beta/models?key=" + apiKey
+	resp, err := http.Get(url)
+	if err != nil {
+		log.Printf("Failed to list models: %v", err)
+		return
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("【DEBUG】Available Models: %s", strings.ReplaceAll(string(body), "\n", " "))
 }
 
 // HandleGenerate: テキスト生成
