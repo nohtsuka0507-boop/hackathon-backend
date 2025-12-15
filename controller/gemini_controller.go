@@ -21,8 +21,7 @@ func NewGeminiController(itemDAO *dao.ItemDAO) *GeminiController {
 	return &GeminiController{ItemDAO: itemDAO}
 }
 
-// --- リクエスト/レスポンス用の構造体（修正版） ---
-// GoogleのREST APIは camelCase を期待します
+// リクエスト構造体
 type GeminiRequest struct {
 	Contents         []Content        `json:"contents"`
 	GenerationConfig GenerationConfig `json:"generationConfig"`
@@ -34,11 +33,11 @@ type Content struct {
 
 type Part struct {
 	Text       string      `json:"text,omitempty"`
-	InlineData *InlineData `json:"inlineData,omitempty"` // 修正: inline_data -> inlineData
+	InlineData *InlineData `json:"inlineData,omitempty"`
 }
 
 type InlineData struct {
-	MimeType string `json:"mimeType"` // 修正: mime_type -> mimeType
+	MimeType string `json:"mimeType"`
 	Data     string `json:"data"`
 }
 
@@ -54,7 +53,6 @@ type GeminiResponse struct {
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
-	// エラー詳細を受け取る用
 	Error struct {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
@@ -62,27 +60,28 @@ type GeminiResponse struct {
 	} `json:"error"`
 }
 
-// --- 共通: Gemini APIを直接叩く関数 ---
+// 共通: Gemini API呼び出し
 func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
-	apiKey := os.Getenv("GEMINI_API_KEY")
+	// ★修正点1: APIキーの前後の空白・改行を完全削除（事故防止）
+	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+
 	if apiKey == "" {
-		log.Println("【重要】GEMINI_API_KEY が設定されていません！")
+		log.Println("【致命的エラー】GEMINI_API_KEY が環境変数に設定されていません。")
 		return "", fmt.Errorf("API Key is missing")
-	} else {
-		// キーが読み込めているか確認（セキュリティのため最初の5文字だけ表示）
-		maskKey := ""
-		if len(apiKey) > 5 {
-			maskKey = apiKey[:5] + "..."
-		}
-		log.Printf("Using API Key: %s", maskKey)
 	}
 
-	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey
+	// ログ確認用（キーの一部を表示）
+	maskedKey := apiKey
+	if len(apiKey) > 8 {
+		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
+	}
+	log.Printf("Gemini Request Start. Key: %s, ImageSize: %d bytes", maskedKey, len(imageData))
 
-	// リクエストのパーツを作成
+	// ★修正点2: モデル名を「gemini-1.5-flash」から「gemini-1.5-flash-001」に固定
+	// エイリアスではなく実体名を指定することで NOT_FOUND を防ぎます
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-001:generateContent?key=" + apiKey
+
 	parts := []Part{{Text: promptText}}
-
-	// 画像がある場合は追加
 	if len(imageData) > 0 {
 		base64Data := base64.StdEncoding.EncodeToString(imageData)
 		parts = append(parts, Part{
@@ -96,7 +95,7 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	reqBody := GeminiRequest{
 		Contents: []Content{{Parts: parts}},
 		GenerationConfig: GenerationConfig{
-			ResponseMimeType: "application/json", // JSON出力を強制
+			ResponseMimeType: "application/json",
 		},
 	}
 
@@ -114,13 +113,14 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	}
 	defer resp.Body.Close()
 
-	// レスポンスボディを読み込む
 	bodyBytes, _ := io.ReadAll(resp.Body)
 
-	// ステータスコードが200以外ならエラーとして処理
+	// ログが改行で切れないように整形
+	logBody := strings.ReplaceAll(string(bodyBytes), "\n", " ")
+	log.Printf("Gemini Response Status: %d, Body: %s", resp.StatusCode, logBody)
+
 	if resp.StatusCode != 200 {
-		log.Printf("Gemini API Error Body: %s", string(bodyBytes)) // 詳細をログに出す
-		return "", fmt.Errorf("API Error (%d): %s", resp.StatusCode, string(bodyBytes))
+		return "", fmt.Errorf("API Error (%d): %s", resp.StatusCode, logBody)
 	}
 
 	var geminiResp GeminiResponse
@@ -128,7 +128,6 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 		return "", err
 	}
 
-	// API側からのエラーがJSONに含まれている場合
 	if geminiResp.Error.Code != 0 {
 		return "", fmt.Errorf("API Error: %s", geminiResp.Error.Message)
 	}
@@ -149,16 +148,12 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
-
 	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、JSON形式 {\"description\": \"...\"} で返してください。", req.ProductName)
-
 	result, err := c.callGeminiAPI(prompt, nil, "")
 	if err != nil {
-		log.Printf("Gemini Gen Error: %v", err)
-		http.Error(w, "AI generation failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(result))
 }
@@ -185,14 +180,12 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 		return
 	}
 	defer file.Close()
-
 	imageData, err := io.ReadAll(file)
 	if err != nil {
 		http.Error(w, "読み込み失敗", http.StatusInternalServerError)
 		return
 	}
 
-	// MIMEタイプの決定
 	mimeType := "image/jpeg"
 	filename := strings.ToLower(header.Filename)
 	if strings.HasSuffix(filename, ".png") {
@@ -231,19 +224,16 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 
 	result, err := c.callGeminiAPI(promptText, imageData, mimeType)
 	if err != nil {
-		log.Printf("Gemini Error: %v", err)
-		// フロントエンドにエラー詳細を返す（デバッグ用）
-		http.Error(w, "AI生成エラー: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
 	cleanTxt := strings.ReplaceAll(result, "```json", "")
 	cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(cleanTxt))
 }
 
-// チャットの不適切発言チェック
+// チャットチェック
 func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
@@ -252,9 +242,7 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 		http.Error(w, "Invalid JSON", http.StatusBadRequest)
 		return
 	}
-
 	prompt := fmt.Sprintf(`以下のメッセージが「攻撃的」「暴力的」か判定してください。問題あれば "UNSAFE"、なければ "SAFE" とJSONの {"result": "SAFE"} 形式で答えてください。メッセージ: "%s"`, req.Content)
-
 	result, err := c.callGeminiAPI(prompt, nil, "")
 	isSafe := true
 	if err == nil {
@@ -262,7 +250,6 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 			isSafe = false
 		}
 	}
-
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]bool{"is_safe": isSafe})
 }
