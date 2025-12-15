@@ -192,20 +192,25 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 
 	var promptText string
 	if mode == "repair" {
-		// ★ここを強化！AIに「利益」や「難易度」まで計算させるプロンプトに変更
+		// ★ここを強化！プロに頼んだ場合の見積もりも出させる
 		promptText = `あなたはプロのリペア職人兼、フリマアプリの相場師です。
 アップロードされた画像の商品の状態を分析し、以下のJSON形式でのみ回答してください。Markdownは不要です。
 
 {
-  "item_name": "商品の推測名（例: 本革のビジネスバッグ）",
-  "damage_check": "破損箇所の具体的な指摘（例: ハンドルの付け根が千切れている、角擦れがある）",
-  "repair_plan": "具体的な修理手順（例: 1.革用接着剤で仮止め 2.麻糸で補強縫い 3.コバコートを塗る）",
-  "difficulty": "修理難易度（5段階評価の数字のみ。例: 3）",
-  "required_tools": ["必要な道具1", "必要な道具2", "必要な道具3"],
-  "current_value": 現在の状態でのメルカリ想定販売価格（数値のみ。例: 1500）,
-  "future_value": 修理して綺麗にした場合のメルカリ想定販売価格（数値のみ。例: 6000）,
-  "estimated_profit": future_value - current_value の計算結果（数値のみ。例: 4500）,
-  "advice": "高く売るためのワンポイントアドバイス（例: 写真を撮るときは自然光で、傷が目立たない角度を探しましょう）"
+  "item_name": "商品の推測名",
+  "damage_check": "状態",
+  "repair_plan": "具体的な修理手順",
+  "difficulty": "修理難易度（1-5）",
+  "required_tools": ["道具1", "道具2"],
+  "current_value": 現在の状態でのメルカリ想定価格（数値）,
+  "future_value": 修理後のメルカリ想定価格（数値）,
+  "estimated_profit": future_value - current_value の計算結果（数値）,
+  
+  "pro_service_cost": 専門業者に修理を依頼した場合の想定費用（数値。高めに設定せよ）,
+  "shipping_cost": 往復の想定送料（数値。例:1500）,
+  "pro_profit": future_value - pro_service_cost - shipping_cost の計算結果（数値。マイナスになっても良い）,
+
+  "advice": "アドバイス"
 }`
 	} else {
 		promptText = `あなたはフリマアプリの出品代行AIです。画像を分析し、売れやすい商品情報を以下のJSONスキーマに従って返してください。
