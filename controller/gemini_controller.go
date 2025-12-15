@@ -1,7 +1,8 @@
 package controller
 
 import (
-	"context"
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"hackathon-backend/dao"
@@ -10,9 +11,6 @@ import (
 	"net/http"
 	"os"
 	"strings"
-
-	"github.com/google/generative-ai-go/genai"
-	"google.golang.org/api/option"
 )
 
 type GeminiController struct {
@@ -21,6 +19,97 @@ type GeminiController struct {
 
 func NewGeminiController(itemDAO *dao.ItemDAO) *GeminiController {
 	return &GeminiController{ItemDAO: itemDAO}
+}
+
+// --- リクエスト/レスポンス用の構造体 ---
+type GeminiRequest struct {
+	Contents         []Content        `json:"contents"`
+	GenerationConfig GenerationConfig `json:"generationConfig"`
+}
+
+type Content struct {
+	Parts []Part `json:"parts"`
+}
+
+type Part struct {
+	Text       string      `json:"text,omitempty"`
+	InlineData *InlineData `json:"inline_data,omitempty"`
+}
+
+type InlineData struct {
+	MimeType string `json:"mime_type"`
+	Data     string `json:"data"`
+}
+
+type GenerationConfig struct {
+	ResponseMimeType string `json:"responseMimeType"`
+}
+
+type GeminiResponse struct {
+	Candidates []struct {
+		Content struct {
+			Parts []struct {
+				Text string `json:"text"`
+			} `json:"parts"`
+		} `json:"content"`
+	} `json:"candidates"`
+}
+
+// --- 共通: Gemini APIを直接叩く関数 ---
+func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
+	apiKey := os.Getenv("GEMINI_API_KEY")
+	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey
+
+	// リクエストのパーツを作成
+	parts := []Part{{Text: promptText}}
+
+	// 画像がある場合は追加
+	if len(imageData) > 0 {
+		base64Data := base64.StdEncoding.EncodeToString(imageData)
+		parts = append(parts, Part{
+			InlineData: &InlineData{
+				MimeType: mimeType,
+				Data:     base64Data,
+			},
+		})
+	}
+
+	reqBody := GeminiRequest{
+		Contents: []Content{{Parts: parts}},
+		GenerationConfig: GenerationConfig{
+			ResponseMimeType: "application/json", // JSON出力を強制
+		},
+	}
+
+	jsonData, _ := json.Marshal(reqBody)
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		body, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("API Error: %s", string(body))
+	}
+
+	var geminiResp GeminiResponse
+	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
+		return "", err
+	}
+
+	if len(geminiResp.Candidates) > 0 && len(geminiResp.Candidates[0].Content.Parts) > 0 {
+		return geminiResp.Candidates[0].Content.Parts[0].Text, nil
+	}
+
+	return "", fmt.Errorf("no response from AI")
 }
 
 // HandleGenerate: テキスト生成
@@ -33,36 +122,18 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	ctx := context.Background()
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		log.Printf("Failed to create client: %v", err)
-		http.Error(w, "AI init failed", http.StatusInternalServerError)
-		return
-	}
-	defer client.Close()
+	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、JSON形式 {\"description\": \"...\"} で返してください。", req.ProductName)
 
-	// ★修正: 安定版の軽量モデル gemini-1.5-flash に変更
-	genModel := client.GenerativeModel("gemini-1.5-flash")
-
-	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、テキストのみで返してください。", req.ProductName)
-
-	resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
+	// API呼び出し（画像なし）
+	result, err := c.callGeminiAPI(prompt, nil, "")
 	if err != nil {
 		log.Printf("Gemini Gen Error: %v", err)
 		http.Error(w, "AI generation failed", http.StatusInternalServerError)
 		return
 	}
-	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
-		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-			response := map[string]string{"description": string(txt)}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(response)
-			return
-		}
-	}
-	http.Error(w, "No response from AI", http.StatusInternalServerError)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(result))
 }
 
 // HandleAnalyzeImage: リペア診断
@@ -77,7 +148,6 @@ func (c *GeminiController) HandleAnalyzeListing(w http.ResponseWriter, r *http.R
 
 // 共通処理
 func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Request, mode string) {
-	// ファイルサイズ制限などを設定
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		http.Error(w, "画像サイズ過大", http.StatusBadRequest)
 		return
@@ -95,30 +165,16 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	imageFormat := "jpeg"
+	// MIMEタイプの決定
+	mimeType := "image/jpeg"
 	filename := strings.ToLower(header.Filename)
 	if strings.HasSuffix(filename, ".png") {
-		imageFormat = "png"
+		mimeType = "image/png"
 	} else if strings.HasSuffix(filename, ".webp") {
-		imageFormat = "webp"
+		mimeType = "image/webp"
 	} else if strings.HasSuffix(filename, ".heic") {
-		imageFormat = "heic"
+		mimeType = "image/heic"
 	}
-
-	ctx := context.Background()
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		http.Error(w, "AIエラー", http.StatusInternalServerError)
-		return
-	}
-	defer client.Close()
-
-	// ★修正: 安定版の軽量モデル gemini-1.5-flash に変更
-	genModel := client.GenerativeModel("gemini-1.5-flash")
-
-	// ★追加: AIに「必ずJSONで返せ」と強制する設定（パースエラー防止）
-	genModel.ResponseMIMEType = "application/json"
 
 	var promptText string
 	if mode == "repair" {
@@ -146,31 +202,19 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 }`
 	}
 
-	prompt := []genai.Part{
-		genai.ImageData(imageFormat, imageData),
-		genai.Text(promptText),
-	}
-
-	resp, err := genModel.GenerateContent(ctx, prompt...)
+	// API呼び出し（画像あり）
+	result, err := c.callGeminiAPI(promptText, imageData, mimeType)
 	if err != nil {
 		log.Printf("Gemini Error: %v", err)
-		http.Error(w, "AI生成エラー", http.StatusInternalServerError)
+		http.Error(w, "AI生成エラー: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
-		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-			// ResponseMIMETypeを指定したので、余計なMarkdown記法は基本的になくなりますが、念のためクリーンアップ
-			cleanTxt := string(txt)
-			cleanTxt = strings.ReplaceAll(cleanTxt, "```json", "")
-			cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
-
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(cleanTxt))
-			return
-		}
-	}
-	http.Error(w, "AI応答なし", http.StatusInternalServerError)
+	// クリーンアップして返す
+	cleanTxt := strings.ReplaceAll(result, "```json", "")
+	cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(cleanTxt))
 }
 
 // チャットの不適切発言チェック
@@ -183,44 +227,13 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	ctx := context.Background()
-	apiKey := os.Getenv("GEMINI_API_KEY")
-	client, err := genai.NewClient(ctx, option.WithAPIKey(apiKey))
-	if err != nil {
-		log.Printf("Failed to create client: %v", err)
-		http.Error(w, "AI init failed", http.StatusInternalServerError)
-		return
-	}
-	defer client.Close()
+	prompt := fmt.Sprintf(`以下のメッセージが「攻撃的」「暴力的」か判定してください。問題あれば "UNSAFE"、なければ "SAFE" とJSONの {"result": "SAFE"} 形式で答えてください。メッセージ: "%s"`, req.Content)
 
-	// ★修正: 安定版の軽量モデル gemini-1.5-flash に変更
-	genModel := client.GenerativeModel("gemini-1.5-flash")
-
-	prompt := fmt.Sprintf(`あなたはコンテンツモデレーターです。以下のメッセージが「攻撃的」「暴力的」「差別的」「性的」な内容を含むか判定してください。
-
-メッセージ: "%s"
-
-判定ルール:
-- 問題がある場合は "UNSAFE" とだけ答えてください。
-- 問題がない場合は "SAFE" とだけ答えてください。
-- 余計な説明は一切不要です。`, req.Content)
-
-	resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
-	if err != nil {
-		log.Printf("Gemini Check Error: %v", err)
-		// エラー時は安全側に倒して通す、あるいはエラーを返す（ここは運用によるが一旦元のまま）
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]bool{"is_safe": true})
-		return
-	}
-
+	result, err := c.callGeminiAPI(prompt, nil, "")
 	isSafe := true
-	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
-		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-			answer := strings.TrimSpace(string(txt))
-			if strings.Contains(answer, "UNSAFE") {
-				isSafe = false
-			}
+	if err == nil {
+		if strings.Contains(result, "UNSAFE") {
+			isSafe = false
 		}
 	}
 
