@@ -43,8 +43,9 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 	}
 	defer client.Close()
 
-	// ★修正: 最新ライブラリならこれで動くはずです
-	genModel := client.GenerativeModel("gemini-2.0-flash-exp")
+	// ★修正: 安定版の軽量モデル gemini-1.5-flash に変更
+	genModel := client.GenerativeModel("gemini-1.5-flash")
+
 	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、テキストのみで返してください。", req.ProductName)
 
 	resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
@@ -53,7 +54,6 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 		http.Error(w, "AI generation failed", http.StatusInternalServerError)
 		return
 	}
-
 	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
 		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
 			response := map[string]string{"description": string(txt)}
@@ -77,6 +77,7 @@ func (c *GeminiController) HandleAnalyzeListing(w http.ResponseWriter, r *http.R
 
 // 共通処理
 func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Request, mode string) {
+	// ファイルサイズ制限などを設定
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		http.Error(w, "画像サイズ過大", http.StatusBadRequest)
 		return
@@ -113,12 +114,15 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 	}
 	defer client.Close()
 
-	// ★修正: gemini-1.5-flash
-	genModel := client.GenerativeModel("gemini-2.0-flash-exp")
+	// ★修正: 安定版の軽量モデル gemini-1.5-flash に変更
+	genModel := client.GenerativeModel("gemini-1.5-flash")
+
+	// ★追加: AIに「必ずJSONで返せ」と強制する設定（パースエラー防止）
+	genModel.ResponseMIMEType = "application/json"
 
 	var promptText string
 	if mode == "repair" {
-		promptText = `あなたはプロのリペア職人です。画像を分析しJSONのみ返してください。Markdown不要。
+		promptText = `あなたはプロのリペア職人です。画像を分析し以下のJSONスキーマに従って情報を返してください。
 {
   "item_name": "商品名",
   "damage_check": "状態",
@@ -132,7 +136,7 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
   "safety_reason": "安全"
 }`
 	} else {
-		promptText = `あなたはフリマアプリの出品代行AIです。画像を分析し、売れやすい商品情報をJSONのみで返してください。Markdown不要。
+		promptText = `あなたはフリマアプリの出品代行AIです。画像を分析し、売れやすい商品情報を以下のJSONスキーマに従って返してください。
 {
   "title": "キャッチーな商品名（40文字以内）",
   "description": "検索にヒットしやすい魅力的な商品説明文（200文字程度）。状態や特徴を含める。",
@@ -156,8 +160,11 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 
 	if len(resp.Candidates) > 0 && len(resp.Candidates[0].Content.Parts) > 0 {
 		if txt, ok := resp.Candidates[0].Content.Parts[0].(genai.Text); ok {
-			cleanTxt := strings.ReplaceAll(string(txt), "```json", "")
+			// ResponseMIMETypeを指定したので、余計なMarkdown記法は基本的になくなりますが、念のためクリーンアップ
+			cleanTxt := string(txt)
+			cleanTxt = strings.ReplaceAll(cleanTxt, "```json", "")
 			cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
+
 			w.Header().Set("Content-Type", "application/json")
 			w.Write([]byte(cleanTxt))
 			return
@@ -186,8 +193,9 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 	}
 	defer client.Close()
 
-	// ★修正: gemini-1.5-flash
-	genModel := client.GenerativeModel("gemini-2.0-flash-exp")
+	// ★修正: 安定版の軽量モデル gemini-1.5-flash に変更
+	genModel := client.GenerativeModel("gemini-1.5-flash")
+
 	prompt := fmt.Sprintf(`あなたはコンテンツモデレーターです。以下のメッセージが「攻撃的」「暴力的」「差別的」「性的」な内容を含むか判定してください。
 
 メッセージ: "%s"
@@ -200,6 +208,7 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 	resp, err := genModel.GenerateContent(ctx, genai.Text(prompt))
 	if err != nil {
 		log.Printf("Gemini Check Error: %v", err)
+		// エラー時は安全側に倒して通す、あるいはエラーを返す（ここは運用によるが一旦元のまま）
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]bool{"is_safe": true})
 		return
