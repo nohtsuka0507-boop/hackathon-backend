@@ -21,7 +21,8 @@ func NewGeminiController(itemDAO *dao.ItemDAO) *GeminiController {
 	return &GeminiController{ItemDAO: itemDAO}
 }
 
-// --- リクエスト/レスポンス用の構造体 ---
+// --- リクエスト/レスポンス用の構造体（修正版） ---
+// GoogleのREST APIは camelCase を期待します
 type GeminiRequest struct {
 	Contents         []Content        `json:"contents"`
 	GenerationConfig GenerationConfig `json:"generationConfig"`
@@ -33,11 +34,11 @@ type Content struct {
 
 type Part struct {
 	Text       string      `json:"text,omitempty"`
-	InlineData *InlineData `json:"inline_data,omitempty"`
+	InlineData *InlineData `json:"inlineData,omitempty"` // 修正: inline_data -> inlineData
 }
 
 type InlineData struct {
-	MimeType string `json:"mime_type"`
+	MimeType string `json:"mimeType"` // 修正: mime_type -> mimeType
 	Data     string `json:"data"`
 }
 
@@ -53,11 +54,29 @@ type GeminiResponse struct {
 			} `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
+	// エラー詳細を受け取る用
+	Error struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+		Status  string `json:"status"`
+	} `json:"error"`
 }
 
 // --- 共通: Gemini APIを直接叩く関数 ---
 func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
 	apiKey := os.Getenv("GEMINI_API_KEY")
+	if apiKey == "" {
+		log.Println("【重要】GEMINI_API_KEY が設定されていません！")
+		return "", fmt.Errorf("API Key is missing")
+	} else {
+		// キーが読み込めているか確認（セキュリティのため最初の5文字だけ表示）
+		maskKey := ""
+		if len(apiKey) > 5 {
+			maskKey = apiKey[:5] + "..."
+		}
+		log.Printf("Using API Key: %s", maskKey)
+	}
+
 	url := "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=" + apiKey
 
 	// リクエストのパーツを作成
@@ -95,14 +114,23 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	}
 	defer resp.Body.Close()
 
+	// レスポンスボディを読み込む
+	bodyBytes, _ := io.ReadAll(resp.Body)
+
+	// ステータスコードが200以外ならエラーとして処理
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("API Error: %s", string(body))
+		log.Printf("Gemini API Error Body: %s", string(bodyBytes)) // 詳細をログに出す
+		return "", fmt.Errorf("API Error (%d): %s", resp.StatusCode, string(bodyBytes))
 	}
 
 	var geminiResp GeminiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&geminiResp); err != nil {
+	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&geminiResp); err != nil {
 		return "", err
+	}
+
+	// API側からのエラーがJSONに含まれている場合
+	if geminiResp.Error.Code != 0 {
+		return "", fmt.Errorf("API Error: %s", geminiResp.Error.Message)
 	}
 
 	if len(geminiResp.Candidates) > 0 && len(geminiResp.Candidates[0].Content.Parts) > 0 {
@@ -124,11 +152,10 @@ func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request
 
 	prompt := fmt.Sprintf("商品名「%s」の魅力的で簡潔な商品説明文を、日本語で200文字以内で書いてください。Markdownは使わず、JSON形式 {\"description\": \"...\"} で返してください。", req.ProductName)
 
-	// API呼び出し（画像なし）
 	result, err := c.callGeminiAPI(prompt, nil, "")
 	if err != nil {
 		log.Printf("Gemini Gen Error: %v", err)
-		http.Error(w, "AI generation failed", http.StatusInternalServerError)
+		http.Error(w, "AI generation failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -202,15 +229,14 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 }`
 	}
 
-	// API呼び出し（画像あり）
 	result, err := c.callGeminiAPI(promptText, imageData, mimeType)
 	if err != nil {
 		log.Printf("Gemini Error: %v", err)
+		// フロントエンドにエラー詳細を返す（デバッグ用）
 		http.Error(w, "AI生成エラー: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// クリーンアップして返す
 	cleanTxt := strings.ReplaceAll(result, "```json", "")
 	cleanTxt = strings.ReplaceAll(cleanTxt, "```", "")
 	w.Header().Set("Content-Type", "application/json")
