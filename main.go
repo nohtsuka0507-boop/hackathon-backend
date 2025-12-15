@@ -20,7 +20,7 @@ import (
 func main() {
 
 	// ログを目立たせて更新確認しやすくします
-	log.Println("🔥🔥🔥 UPDATED VERSION: AI Safety Check Added 🔥🔥🔥")
+	log.Println("🔥🔥🔥 UPDATED VERSION: Craftsman Chat Added 🔥🔥🔥")
 
 	// --- 0. 環境変数の読み込み ---
 	if err := godotenv.Load(); err != nil {
@@ -150,10 +150,19 @@ func main() {
 		}
 	})
 
-	// ★追加: AI不適切コンテンツチェック
+	// AI不適切コンテンツチェック
 	mux.HandleFunc("/check-content", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
 			geminiController.HandleCheckContent(w, r)
+		} else {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+
+	// ★追加: 職人チャット機能のルーティング
+	mux.HandleFunc("/craftsman-chat", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			geminiController.HandleCraftsmanChat(w, r)
 		} else {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -171,7 +180,6 @@ func main() {
 		}
 	})
 
-	// update
 	// いいね機能
 	mux.HandleFunc("/likes", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
@@ -277,7 +285,7 @@ func createTables(db *sql.DB) error {
 		return fmt.Errorf("create likes table error: %w", err)
 	}
 
-	// 検索を高速化するためのインデックス (目次)
+	// 検索を高速化するためのインデックス
 	if _, err := db.Exec("CREATE INDEX IF NOT EXISTS idx_messages_item_id ON messages (item_id);"); err != nil {
 		log.Printf("Note: index creation (messages) might affect: %v", err)
 	}
@@ -287,5 +295,3 @@ func createTables(db *sql.DB) error {
 
 	return nil
 }
-
-// Force rebuild
