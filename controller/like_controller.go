@@ -3,6 +3,7 @@ package controller
 import (
 	"encoding/json"
 	"hackathon-backend/dao"
+	"log" // ログ出力用に追加
 	"net/http"
 )
 
@@ -27,7 +28,9 @@ func (c *LikeController) HandleToggleLike(w http.ResponseWriter, r *http.Request
 
 	isLiked, err := c.LikeDAO.ToggleLike(req.UserID, req.ItemID)
 	if err != nil {
-		http.Error(w, "Server Error", http.StatusInternalServerError)
+		// ★エラー詳細をログに出す（これでバグの原因が一発でわかります）
+		log.Printf("【いいねエラー】ToggleLike Failed: %v", err)
+		http.Error(w, "Server Error: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 
@@ -46,6 +49,7 @@ func (c *LikeController) HandleGetLikes(w http.ResponseWriter, r *http.Request) 
 
 	ids, err := c.LikeDAO.GetLikedItemIDs(userID)
 	if err != nil {
+		log.Printf("【いいね取得エラー】GetLikedItemIDs Failed: %v", err)
 		http.Error(w, "Server Error", http.StatusInternalServerError)
 		return
 	}

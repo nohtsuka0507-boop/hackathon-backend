@@ -13,7 +13,6 @@ func NewLikeDAO(db *sql.DB) *LikeDAO {
 }
 
 // ToggleLike: いいねを付けたり消したりする（スイッチ機能）
-// 変更点: likesテーブルの操作に加え、itemsテーブルの like_count も更新するようにしました
 func (dao *LikeDAO) ToggleLike(userID, itemID string) (bool, error) {
 	// 1. まず、既にいいねしているか確認
 	var exists bool
@@ -33,12 +32,13 @@ func (dao *LikeDAO) ToggleLike(userID, itemID string) (bool, error) {
 		}
 
 		// B. itemsテーブルのいいね数(like_count)を -1 する
+		// ★ここが「数が保存されない」を直すための重要な行です！
 		_, err = dao.db.Exec("UPDATE items SET like_count = like_count - 1 WHERE id = ?", itemID)
 		if err != nil {
 			return false, err
 		}
 
-		return false, nil // "いいね解除" したので false を返す
+		return false, nil // "いいね解除"
 
 	} else {
 		// --- まだいいねしてないなら -> 登録 (Like) ---
@@ -50,12 +50,13 @@ func (dao *LikeDAO) ToggleLike(userID, itemID string) (bool, error) {
 		}
 
 		// B. itemsテーブルのいいね数(like_count)を +1 する
+		// ★ここが「数が保存されない」を直すための重要な行です！
 		_, err = dao.db.Exec("UPDATE items SET like_count = like_count + 1 WHERE id = ?", itemID)
 		if err != nil {
 			return false, err
 		}
 
-		return true, nil // "いいね" したので true を返す
+		return true, nil // "いいね"
 	}
 }
 
