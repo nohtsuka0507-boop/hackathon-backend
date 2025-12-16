@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 )
 
 type GeminiController struct {
@@ -60,7 +61,7 @@ type GeminiResponse struct {
 	} `json:"error"`
 }
 
-// 共通: Gemini API呼び出し
+// 共通: Gemini API呼び出し (リトライ機能付き)
 func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mimeType string) (string, error) {
 	apiKey := strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
 	if apiKey == "" {
@@ -96,41 +97,58 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	}
 
 	jsonData, _ := json.Marshal(reqBody)
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
+	// ★リトライロジック: 最大3回試行
+	maxRetries := 3
+	var lastErr error
 
-	bodyBytes, _ := io.ReadAll(resp.Body)
-	logBody := strings.ReplaceAll(string(bodyBytes), "\n", " ")
+	for i := 0; i < maxRetries; i++ {
+		if i > 0 {
+			log.Printf("Retry %d/%d for Gemini API...", i+1, maxRetries)
+			time.Sleep(time.Second * 2) // 2秒待ってから再トライ
+		}
 
-	if resp.StatusCode != 200 {
-		log.Printf("Gemini API Error (%d): %s", resp.StatusCode, logBody)
+		req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		client := &http.Client{Timeout: 30 * time.Second} // タイムアウト設定も追加
+		resp, err := client.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		defer resp.Body.Close()
+
+		bodyBytes, _ := io.ReadAll(resp.Body)
+
+		// 成功 (200) なら即終了
+		if resp.StatusCode == 200 {
+			var geminiResp GeminiResponse
+			if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&geminiResp); err != nil {
+				return "", err
+			}
+			if len(geminiResp.Candidates) > 0 && len(geminiResp.Candidates[0].Content.Parts) > 0 {
+				return geminiResp.Candidates[0].Content.Parts[0].Text, nil
+			}
+			return "", fmt.Errorf("no response content")
+		}
+
+		// 503 (Overloaded) ならリトライ続行
+		if resp.StatusCode == 503 {
+			log.Printf("Gemini 503 Overloaded. Retrying...")
+			lastErr = fmt.Errorf("API Error (503): Overloaded")
+			continue
+		}
+
+		// それ以外のエラーなら即終了
+		logBody := strings.ReplaceAll(string(bodyBytes), "\n", " ")
 		return "", fmt.Errorf("API Error (%d): %s", resp.StatusCode, logBody)
 	}
 
-	var geminiResp GeminiResponse
-	if err := json.NewDecoder(bytes.NewReader(bodyBytes)).Decode(&geminiResp); err != nil {
-		return "", err
-	}
-
-	if geminiResp.Error.Code != 0 {
-		return "", fmt.Errorf("API Error: %s", geminiResp.Error.Message)
-	}
-
-	if len(geminiResp.Candidates) > 0 && len(geminiResp.Candidates[0].Content.Parts) > 0 {
-		return geminiResp.Candidates[0].Content.Parts[0].Text, nil
-	}
-
-	return "", fmt.Errorf("no response from AI")
+	return "", fmt.Errorf("Gemini API Failed after %d retries. Last error: %v", maxRetries, lastErr)
 }
 
 // HandleGenerate: テキスト生成
@@ -192,7 +210,6 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 
 	var promptText string
 	if mode == "repair" {
-		// ★ここを修正！ sales_copy (リペア後の魅力的な説明文) を追加
 		promptText = `あなたはプロのリペア職人兼、フリマアプリの相場師です。
 アップロードされた画像の商品の状態を分析し、以下のJSON形式でのみ回答してください。Markdownは不要です。
 
