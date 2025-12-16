@@ -71,6 +71,12 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	modelName := "gemini-2.5-flash"
 	url := "https://generativelanguage.googleapis.com/v1beta/models/" + modelName + ":generateContent?key=" + apiKey
 
+	maskedKey := apiKey
+	if len(apiKey) > 8 {
+		maskedKey = apiKey[:4] + "...." + apiKey[len(apiKey)-4:]
+	}
+	log.Printf("Gemini Request (%s) Start. Key: %s", modelName, maskedKey)
+
 	parts := []Part{{Text: promptText}}
 	if len(imageData) > 0 {
 		base64Data := base64.StdEncoding.EncodeToString(imageData)
@@ -127,7 +133,7 @@ func (c *GeminiController) callGeminiAPI(promptText string, imageData []byte, mi
 	return "", fmt.Errorf("no response from AI")
 }
 
-// HandleGenerate: 商品説明文生成
+// HandleGenerate: テキスト生成
 func (c *GeminiController) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ProductName string `json:"productName"`
@@ -156,7 +162,7 @@ func (c *GeminiController) HandleAnalyzeListing(w http.ResponseWriter, r *http.R
 	c.analyzeImageCommon(w, r, "listing")
 }
 
-// 共通処理: 画像分析
+// 共通処理
 func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Request, mode string) {
 	if err := r.ParseMultipartForm(10 << 20); err != nil {
 		http.Error(w, "画像サイズ過大", http.StatusBadRequest)
@@ -186,6 +192,7 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 
 	var promptText string
 	if mode == "repair" {
+		// ★ここを修正！ sales_copy (リペア後の魅力的な説明文) を追加
 		promptText = `あなたはプロのリペア職人兼、フリマアプリの相場師です。
 アップロードされた画像の商品の状態を分析し、以下のJSON形式でのみ回答してください。Markdownは不要です。
 
@@ -198,9 +205,10 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
   "current_value": 現在の状態でのメルカリ想定価格（数値）,
   "future_value": 修理後のメルカリ想定価格（数値）,
   "estimated_profit": future_value - current_value の計算結果（数値）,
-  "pro_service_cost": 専門業者に修理を依頼した場合の想定費用（数値。高めに設定せよ）,
-  "shipping_cost": 往復の想定送料（数値。例:1500）,
-  "pro_profit": future_value - pro_service_cost - shipping_cost の計算結果（数値。マイナスになっても良い）,
+  "pro_service_cost": 専門業者に修理を依頼した場合の想定費用（数値）,
+  "shipping_cost": 往復の想定送料（数値）,
+  "pro_profit": future_value - pro_service_cost - shipping_cost の計算結果（数値）,
+  "sales_copy": "リペアして綺麗になったこの商品を、高値で売るための魅力的で高級感のある商品説明文（200文字程度）",
   "advice": "アドバイス"
 }`
 	} else {
@@ -225,7 +233,7 @@ func (c *GeminiController) analyzeImageCommon(w http.ResponseWriter, r *http.Req
 	w.Write([]byte(cleanTxt))
 }
 
-// HandleCheckContent: 不適切コンテンツチェック
+// チャットチェック
 func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Content string `json:"content"`
@@ -246,7 +254,7 @@ func (c *GeminiController) HandleCheckContent(w http.ResponseWriter, r *http.Req
 	json.NewEncoder(w).Encode(map[string]bool{"is_safe": isSafe})
 }
 
-// ★追加: 職人チャット機能
+// 職人チャット
 func (c *GeminiController) HandleCraftsmanChat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Message string `json:"message"`
@@ -256,7 +264,6 @@ func (c *GeminiController) HandleCraftsmanChat(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	// 職人「山田匠」のペルソナ定義
 	prompt := fmt.Sprintf(`
 あなたは「Re:Value」専属のベテランリペア職人「山田匠（やまだ たくみ）」です。
 以下の設定を守って回答してください。
